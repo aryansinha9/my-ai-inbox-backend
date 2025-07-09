@@ -6,7 +6,7 @@ const User = require('../models/User');
 
 const FB_APP_ID = process.env.FACEBOOK_APP_ID;
 const FB_APP_SECRET = process.env.FACEBOOK_APP_SECRET;
-const REDIRECT_URI = 'http://localhost:4000/api/auth/instagram/callback';
+const REDIRECT_URI = `${process.env.SERVER_URL}/api/auth/instagram/callback`;
 
 // Helper function to get the user's profile
 async function getUserProfile(accessToken) {
@@ -107,7 +107,7 @@ router.get('/instagram/callback', async (req, res) => {
         
         // Step 5: Redirect back to frontend
         console.log(`[DEBUG] --- OAuth Callback Complete. Redirecting to frontend with userId: ${user._id} ---`);
-        res.redirect(`http://localhost:5173/?userId=${user._id.toString()}`);
+        res.redirect(`${process.env.FRONTEND_URL}/?userId=${user._id.toString()}`);
 
     } catch (error) {
         console.error('\n--- FATAL OAUTH ERROR ---');
