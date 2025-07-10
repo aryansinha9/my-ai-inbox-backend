@@ -7,7 +7,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 
 const apiRoutes = require('./routes/api');
-const webhookRoutes =require('./routes/webhook');
+const webhookRoutes = require('./routes/webhook');
 const authRoutes = require('./routes/auth');
 
 const app = express();
@@ -21,43 +21,64 @@ mongoose.connect(process.env.MONGO_URI)
         process.exit(1);
     });
 
-// 3. Middleware
-// --- THIS IS THE CORRECTED SECTION ---
+// 3. Middleware - UPDATED CORS CONFIGURATION
 
-// Define the list of trusted frontend origins.
-// We use process.env.FRONTEND_URL to get the live Vercel URL dynamically.
+// Define the list of trusted frontend origins
 const allowedOrigins = [
     'http://localhost:5173', // For local development
-    process.env.FRONTEND_URL   // For the deployed Vercel site
+    process.env.FRONTEND_URL, // Production Vercel site
+    'https://*.vercel.app'   // Wildcard for all Vercel deployments
 ];
 
-const corsOptions = {
-    origin: function (origin, callback) {
-        // If the origin is in our trusted list (or if it's a server-to-server request with no origin), allow it.
-        if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
-        }
+// Custom CORS origin check function
+const originCheck = (origin, callback) => {
+    // Allow requests with no origin (server-to-server)
+    if (!origin) return callback(null, true);
+    
+    // Check exact matches
+    if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
     }
+    
+    // Check wildcard patterns
+    if (allowedOrigins.some(pattern => {
+        if (pattern.startsWith('https://*.')) {
+            const domain = pattern.split('*.')[1];
+            return origin.endsWith(domain);
+        }
+        return false;
+    })) {
+        return callback(null, true);
+    }
+    
+    callback(new Error(`Not allowed by CORS: ${origin}`));
 };
 
-// **CRITICAL FIX:** Pass the 'corsOptions' object into the cors middleware.
+const corsOptions = {
+    origin: originCheck,
+    credentials: true,
+    optionsSuccessStatus: 200
+};
+
+// Apply CORS middleware
 app.use(cors(corsOptions));
 
-// This middleware is for parsing incoming request bodies.
+// Handle preflight requests for all routes
+app.options('*', cors(corsOptions));
+
+// Request logging middleware (for debugging)
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} | Origin: ${req.headers.origin || 'none'}`);
+    next();
+});
+
+// Body parsers
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// --- END OF CORRECTION ---
-
-
 // 4. Routes
-// The API for our React frontend
 app.use('/api', apiRoutes);
-// The Webhook for Meta/Instagram
 app.use('/webhook', webhookRoutes);
-// The Authentication flow for Meta
 app.use('/api/auth', authRoutes);
 
 // Simple root route for Render's Health Check
@@ -67,6 +88,6 @@ app.get('/', (req, res) => {
 
 // 5. Start the Server
 app.listen(PORT, () => {
-    // The console log now correctly uses the PORT variable.
     console.log(`CEO Backend server is listening on port ${PORT}`);
+    console.log(`Allowed CORS origins: ${allowedOrigins.join(', ')}`);
 });
