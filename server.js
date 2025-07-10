@@ -27,9 +27,12 @@ mongoose.connect(process.env.MONGO_URI)
 
 // Define the list of trusted frontend origins. Using the env variable is best practice.
 const allowedOrigins = [
-    'http://localhost:5173', // For local development
-    process.env.FRONTEND_URL   // For the deployed Vercel site
-];
+    'http://localhost:5173',
+    process.env.FRONTEND_URL
+]
+.map(url => url ? url.trim() : url) // Trim whitespace from URLs
+.filter(url => url); // Filter out any undefined, null, or empty strings
+
 
 const corsOptions = {
     origin: function (origin, callback) {
