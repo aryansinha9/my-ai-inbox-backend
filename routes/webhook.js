@@ -7,6 +7,7 @@ const Conversation = require('../models/Conversation');
 
 const META_VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
 const PYTHON_API_BASE_URL = process.env.PYTHON_API_BASE_URL;
+process.env.PYTHON_API_BASE_URL.trim() : null;
 const PYTHON_INTERNAL_API_KEY = process.env.PYTHON_INTERNAL_API_KEY;
 
 // Webhook Verification Endpoint
