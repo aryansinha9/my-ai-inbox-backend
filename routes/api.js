@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const Conversation = require('../models/Conversation');
+const OnboardingSession = require('../models/OnboardingSession'); // ADDED
 
 // For now, we will mock the user login. In a real app, you'd implement JWT authentication.
 const MOCK_USER_ID = "66a9f0f67077a9a3b3c3f915"; // Replace with an actual ID from your DB later
@@ -131,6 +132,55 @@ router.get('/user/:id', async (req, res) => {
     } catch (error) {
         console.error(`[API] Error fetching user by ID: ${req.params.id}`, error);
         res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// POST /api/finalize-onboarding - NEW ENDPOINT
+router.post('/finalize-onboarding', async (req, res) => {
+    const { sessionId, selectedPageId } = req.body;
+
+    if (!sessionId || !selectedPageId) {
+        return res.status(400).json({ error: 'Session ID and Selected Page ID are required.' });
+    }
+
+    try {
+        // 1. Find the temporary session
+        const session = await OnboardingSession.findById(sessionId);
+        if (!session) {
+            return res.status(404).json({ error: 'Onboarding session not found or expired.' });
+        }
+
+        // 2. Find the specific page the user selected from the session's page list
+        const selectedPage = session.pages.find(p => p.id === selectedPageId);
+        if (!selectedPage) {
+            return res.status(400).json({ error: 'Selected page not found in session.' });
+        }
+
+        // 3. Create or Update the permanent User record
+        const user = await User.findOneAndUpdate(
+            { email: session.email }, // Use email as the primary key for finding the user
+            {
+                name: session.name,
+                email: session.email,
+                avatarUrl: session.avatarUrl,
+                'business.facebookUserId': session.facebookUserId,
+                'business.instagramPageId': selectedPage.id,
+                'business.instagramPageAccessToken': selectedPage.access_token,
+                // You can collect this in a later step, for now use a placeholder
+                'business.googleSheetId': '1UH8Bwx14AkI5bvtKdUDTjCmtgDlZmM-DWeVhe1HUuiA',
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+
+        // 4. Delete the temporary session
+        await OnboardingSession.findByIdAndDelete(sessionId);
+
+        // 5. Send the complete user object back to the frontend
+        res.json(user);
+
+    } catch (error) {
+        console.error('[FINALIZE ERROR]', error);
+        res.status(500).json({ error: 'Failed to finalize onboarding.' });
     }
 });
 
