@@ -6,7 +6,7 @@ const User = require('../models/User');
 
 const FB_APP_ID = process.env.FACEBOOK_APP_ID;
 const FB_APP_SECRET = process.env.FACEBOOK_APP_SECRET;
-const REDIRECT_URI = `${process.env.SERVER_URL}/auth/instagram/callback`;
+const REDIRECT_URI = `${process.env.SERVER_URL}/api/auth/instagram/callback`;
 
 // Helper function to get the user's profile
 async function getUserProfile(accessToken) {
