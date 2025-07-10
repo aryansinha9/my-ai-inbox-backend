@@ -3,6 +3,7 @@ const express = require('express');
 const axios = require('axios');
 const router = express.Router();
 const User = require('../models/User');
+const OnboardingSession = require('../models/OnboardingSession'); // <-- ADDED
 
 const FB_APP_ID = process.env.FACEBOOK_APP_ID;
 const FB_APP_SECRET = process.env.FACEBOOK_APP_SECRET;
@@ -64,69 +65,53 @@ router.get('/instagram', (req, res) => {
     res.redirect(authUrl);
 });
 
-// Route #2: The upgraded multi-tenant callback
+// Route #2: The UPGRADED callback - Step 1 of Onboarding
 router.get('/instagram/callback', async (req, res) => {
     const { code } = req.query;
-    console.log('[DEBUG] --- OAuth Callback Started ---');
+    console.log('[DEBUG] --- OAuth Callback Started (Page Selection Flow) ---');
 
     if (!code) {
-        return res.status(400).send('Error: No authorization code provided by Facebook.');
+        return res.status(400).send('Error: No authorization code provided.');
     }
 
     try {
-        // Step 1: Get a long-lived USER access token
-        console.log('[DEBUG] Step 1: Getting long-lived USER token...');
+        // Step 1: Get user token and profile
         const userAccessToken = await getLongLivedUserToken(code);
-        console.log('[DEBUG] Step 1 SUCCESS: Got long-lived USER token.');
-
-        // Step 2: Get the user's Pages to find the permanent PAGE Access Token
-        console.log('[DEBUG] Step 2: Getting user\'s managed pages...');
-        const pagesUrl = `https://graph.facebook.com/me/accounts?access_token=${userAccessToken}`;
-        const pagesResponse = await axios.get(pagesUrl);
-        
-        // In a real app, you would let the user choose which page. For now, we take the first.
-        const firstPage = pagesResponse.data.data[0];
-        if (!firstPage) {
-            return res.status(400).send("Could not find a Facebook Page. Please ensure you granted permission for the correct page during login.");
-        }
-        
-        const pageId = firstPage.id;
-        const pageAccessToken = firstPage.access_token; // This is the permanent token we need!
-        console.log(`[DEBUG] Step 2 SUCCESS: Found Page ID: ${pageId}`);
-
-        // Step 3: Get the user's profile info
-        console.log('[DEBUG] Step 3: Getting user profile...');
         const profile = await getUserProfile(userAccessToken);
-        console.log(`[DEBUG] Step 3 SUCCESS: Got profile for user (Email: ${profile.email})`);
+        console.log(`[DEBUG] Got profile for: ${profile.email}`);
 
-        // Step 4: Find or Create the user in our database
-        console.log(`[DEBUG] Step 4: Finding/Creating user for Facebook ID ${profile.id}`);
-        const user = await User.findOneAndUpdate(
-            { 
-                $or: [
-                    { 'business.facebookUserId': profile.id },
-                    { email: profile.email }
-                ]
-            },
-            { 
+        // Step 2: Get ALL of the user's managed pages
+        const pagesUrl = `https://graph.facebook.com/me/accounts?fields=id,name,access_token&access_token=${userAccessToken}`;
+        const pagesResponse = await axios.get(pagesUrl);
+        const userPages = pagesResponse.data.data;
+
+        if (!userPages || userPages.length === 0) {
+            return res.status(400).send("Could not find any Facebook Pages. Please ensure you granted permission for at least one page.");
+        }
+        console.log(`[DEBUG] Found ${userPages.length} pages for user.`);
+
+        // Step 3: Save to temporary OnboardingSession
+        const session = await OnboardingSession.findOneAndUpdate(
+            { facebookUserId: profile.id },
+            {
                 name: profile.name,
                 email: profile.email,
                 avatarUrl: profile.picture.data.url,
-                'business.facebookUserId': profile.id, // Always update the facebookUserId
-                'business.instagramPageId': pageId,
-                'business.instagramPageAccessToken': pageAccessToken,
-                'business.googleSheetId': '1UH8Bwx14AkI5bvtKdUDTjCmtgDlZmM-DWeVhe1HUuiA', // Use your real Sheet ID
+                pages: userPages.map(p => ({ 
+                    id: p.id, 
+                    name: p.name, 
+                    access_token: p.access_token 
+                }))
             },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
+            { upsert: true, new: true }
         );
-        console.log(`[DEBUG] Step 4 SUCCESS: Database operation complete for user ID: ${user._id}`);
-        
-        // Step 5: Redirect back to frontend
-        console.log(`[DEBUG] --- OAuth Callback Complete. Redirecting to frontend with userId: ${user._id} ---`);
-        res.redirect(`${process.env.FRONTEND_URL}/?userId=${user._id.toString()}`);
+
+        // Step 4: Redirect to page selection UI
+        console.log(`[DEBUG] Redirecting to page selection for session ID: ${session._id}`);
+        res.redirect(`${process.env.FRONTEND_URL}/select-page?sessionId=${session._id}`);
 
     } catch (error) {
-        console.error('\n--- FATAL OAUTH ERROR ---');
+        console.error('\n--- FATAL OAUTH CALLBACK ERROR ---');
         if (error.response) {
             console.error('[DEBUG] Axios Error Data:', JSON.stringify(error.response.data, null, 2));
         } else {
