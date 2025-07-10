@@ -47,23 +47,18 @@ router.post('/', (req, res) => {
         console.log('[Webhook] Received an Instagram event.');
 
         const messageProcessingPromises = body.entry.map(entry => {
-            // Log each entry to see how many we are getting
             console.log(`[Webhook] Processing entry ID: ${entry.id}`);
             
             return entry.messaging.map(event => {
-                // Log each event to see how many we are getting
                 console.log(`[Webhook] Processing event for sender: ${event.sender.id}`);
 
                 if (event.message && !event.message.is_echo) {
-                    // Return the promise from processInstagramMessage
                     return processInstagramMessage(event);
                 }
-                // Return a resolved promise for events we don't care about
                 return Promise.resolve(); 
             });
-        }).flat(); // Flatten the array of promises
+        }).flat();
 
-        // Wait for all messages to be processed, but don't hold up the response
         Promise.all(messageProcessingPromises).catch(err => {
             console.error('[Webhook] An error occurred in the processing pipeline:', err);
         });
@@ -79,15 +74,9 @@ async function processInstagramMessage(event) {
     const pageId = event.recipient.id;
     const messageText = event.message.text;
 
-    // This is a more robust check for echoes.
-    if (event.message.is_echo) {
-        console.log(`[Webhook] Ignoring an echo message for page ${pageId}.`);
-        return; // Stop processing immediately
-    }
-
-    if (!messageText) {
-        console.log(`[Webhook] Ignoring a non-text message (e.g., a sticker or reaction).`);
-        return; // Stop processing
+    // Skip echoes and non-text messages
+    if (event.message.is_echo || !messageText) {
+        return;
     }
 
     console.log(`[Webhook] Processing inbound message: "${messageText}" from ${customerId} for page ${pageId}`);
@@ -100,32 +89,58 @@ async function processInstagramMessage(event) {
         }
         console.log(`[Webhook] Matched message to client: ${client.email}`);
 
-        if (!client.business.platformAiStatus.instagram) {
-            console.log(`[Webhook] Global AI is disabled for client ${client.email}. Aborting.`);
-            return;
+        // --- UPGRADED CONVERSATION HANDLING LOGIC ---
+        let conversation = await Conversation.findOne({
+            userId: client._id,
+            contactId: customerId,
+            platform: 'instagram'
+        });
+
+        // If it's a NEW conversation, fetch the user's profile info first
+        if (!conversation) {
+            console.log(`[Webhook] New conversation detected. Fetching profile for contact ID: ${customerId}`);
+            
+            // Fetch Instagram profile details
+            const userProfile = await getInstagramUserProfile(
+                customerId, 
+                client.business.instagramPageAccessToken
+            );
+            
+            // Create new conversation with enriched data
+            conversation = await Conversation.create({
+                userId: client._id,
+                platform: 'instagram',
+                contactId: customerId,
+                contactName: userProfile.name,
+                contactAvatarUrl: userProfile.avatarUrl,
+                lastMessage: messageText,
+                lastMessageTimestamp: new Date(event.timestamp)
+            });
+            
+            console.log(`[Webhook] Created new conversation for: ${userProfile.name}`);
+        } else {
+            // Existing conversation - just update the last message
+            conversation.lastMessage = messageText;
+            conversation.lastMessageTimestamp = new Date(event.timestamp);
+            await conversation.save();
         }
+        // --- END OF UPGRADED LOGIC ---
 
-        const conversation = await Conversation.findOneAndUpdate(
-            { userId: client._id, contactId: customerId, platform: 'instagram' },
-            { $set: { lastMessage: messageText, lastMessageTimestamp: new Date(event.timestamp) } },
-            { upsert: true, new: true, setDefaultsOnInsert: true }
-        );
-
-        if (!conversation.isAiEnabled) {
-            console.log(`[Webhook] AI is disabled for specific conversation with contact ${customerId}. Aborting.`);
+        // Check if AI is enabled for this conversation
+        if (!client.business.platformAiStatus.instagram || !conversation.isAiEnabled) {
+            console.log(`[Webhook] AI is disabled for this client or conversation. Aborting.`);
             return;
         }
 
         console.log(`[Webhook] All checks passed. Calling Python AI service.`);
         await callPythonAiService(
-            customerId, 
-            messageText, 
+            customerId,
+            messageText,
             client.business.googleSheetId,
             client.business.instagramPageAccessToken
         );
 
-    } catch (error)
-    {
+    } catch (error) {
         console.error('[Webhook] CRITICAL ERROR processing Instagram message:', error);
     }
 }
@@ -133,16 +148,13 @@ async function processInstagramMessage(event) {
 // Upgraded function to call our Python Microservice with the page token
 async function callPythonAiService(customerId, messageText, sheetId, pageAccessToken) {
     try {
-        // Validate environment variable
         if (!PYTHON_API_BASE_URL) {
             throw new Error("PYTHON_API_BASE_URL environment variable not set or is empty!");
         }
 
-        // Construct and log the target URL
         const finalUrl = `${PYTHON_API_BASE_URL}/api/process-message`;
         console.log(`[Webhook] Preparing to call Python AI. Constructed URL: ${finalUrl}`);
 
-        // Make the API request
         await axios.post(
             finalUrl,
             {
@@ -160,11 +172,33 @@ async function callPythonAiService(customerId, messageText, sheetId, pageAccessT
         );
         console.log('[Webhook] Successfully called Python service.');
     } catch (error) {
-        // Enhanced error logging
         const errorMsg = error.response 
             ? JSON.stringify(error.response.data) 
             : error.message;
         console.error('[Webhook] FAILED to call Python AI service:', errorMsg);
+    }
+}
+
+// NEW HELPER FUNCTION: Fetch Instagram user profile details
+async function getInstagramUserProfile(userId, pageAccessToken) {
+    try {
+        const url = `https://graph.facebook.com/${userId}?fields=name,profile_pic&access_token=${pageAccessToken}`;
+        const response = await axios.get(url);
+        const userData = response.data;
+        
+        return {
+            name: userData.name,
+            avatarUrl: userData.profile_pic
+        };
+    } catch (error) {
+        console.error(`[Webhook] Failed to fetch profile for user ${userId}:`, 
+                      error.response ? error.response.data : error.message);
+        
+        // Return defaults if the call fails
+        return {
+            name: `User ${userId.slice(-4)}`, // Partial ID for identification
+            avatarUrl: 'https://picsum.photos/seed/placeholder/100/100' // Generic placeholder
+        };
     }
 }
 
