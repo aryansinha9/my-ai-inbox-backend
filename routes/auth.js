@@ -3,7 +3,7 @@ const express = require('express');
 const axios = require('axios');
 const router = express.Router();
 const User = require('../models/User');
-const OnboardingSession = require('../models/OnboardingSession'); // <-- ADDED
+const OnboardingSession = require('../models/OnboardingSession');
 
 const FB_APP_ID = process.env.FACEBOOK_APP_ID;
 const FB_APP_SECRET = process.env.FACEBOOK_APP_SECRET;
@@ -80,27 +80,35 @@ router.get('/instagram/callback', async (req, res) => {
         const profile = await getUserProfile(userAccessToken);
         console.log(`[DEBUG] Got profile for: ${profile.email}`);
 
-        // Step 2: Get ALL of the user's managed pages
-        const pagesUrl = `https://graph.facebook.com/me/accounts?fields=id,name,access_token&access_token=${userAccessToken}`;
+        // Step 2: Get ALL of the user's managed pages AND their linked Instagram accounts
+        // --- THIS IS THE FIX ---
+        const fields = 'id,name,access_token,instagram_business_account{id,username,profile_picture_url}';
+        const pagesUrl = `https://graph.facebook.com/me/accounts?fields=${fields}&access_token=${userAccessToken}`;
+        // --- END OF FIX ---
+        
         const pagesResponse = await axios.get(pagesUrl);
-        const userPages = pagesResponse.data.data;
+        
+        // Filter out pages that do NOT have an Instagram account linked
+        const userPagesWithIg = pagesResponse.data.data.filter(p => p.instagram_business_account);
 
-        if (!userPages || userPages.length === 0) {
-            return res.status(400).send("Could not find any Facebook Pages. Please ensure you granted permission for at least one page.");
+        if (!userPagesWithIg || userPagesWithIg.length === 0) {
+            return res.status(400).send("Could not find any Facebook Pages with a linked Instagram Business Account.");
         }
-        console.log(`[DEBUG] Found ${userPages.length} pages for user.`);
+        console.log(`[DEBUG] Found ${userPagesWithIg.length} pages with linked Instagram accounts.`);
 
-        // Step 3: Save to temporary OnboardingSession
+        // Step 3: Save this richer information to the temporary OnboardingSession
         const session = await OnboardingSession.findOneAndUpdate(
             { facebookUserId: profile.id },
             {
                 name: profile.name,
                 email: profile.email,
                 avatarUrl: profile.picture.data.url,
-                pages: userPages.map(p => ({ 
-                    id: p.id, 
-                    name: p.name, 
-                    access_token: p.access_token 
+                // Now we save the Instagram details instead of the Facebook Page details
+                pages: userPagesWithIg.map(p => ({
+                    id: p.instagram_business_account.id, // Save the INSTAGRAM ID
+                    name: p.instagram_business_account.username, // Save the INSTAGRAM USERNAME
+                    access_token: p.access_token, // The Page Access Token is still what we need
+                    avatar: p.instagram_business_account.profile_picture_url // Save Instagram profile picture
                 }))
             },
             { upsert: true, new: true }
