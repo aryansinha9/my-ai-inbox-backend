@@ -70,9 +70,9 @@ app.use(express.urlencoded({ extended: true }));
 
 
 // 4. Routes
-app.use('/api', apiRoutes);
-app.use('/webhook', webhookRoutes);
-app.use('/api/auth', authRoutes);
+//app.use('/api', apiRoutes);
+//app.use('/webhook', webhookRoutes);
+//app.use('/api/auth', authRoutes);
 
 // Simple root route for Render's Health Check
 app.get('/', (req, res) => {
