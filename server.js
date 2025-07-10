@@ -7,9 +7,10 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// Import routes
+// Import all routes
 const webhookRoutes = require('./routes/webhook');
-const authRoutes = require('./routes/auth');  // ADDED
+const authRoutes = require('./routes/auth');
+const apiRoutes = require('./routes/api');  // ADDED
 
 mongoose.connect(process.env.MONGO_URI)
     .then(() => console.log("Successfully connected to MongoDB."))
@@ -23,9 +24,10 @@ app.use(express.json());
 
 console.log("--- Starting Minimal Server ---");
 
-// Mount routes
+// Mount routes in proper order
 app.use('/webhook', webhookRoutes);
-app.use('/api/auth', authRoutes);  // ADDED
+app.use('/api/auth', authRoutes);  // More specific path first
+app.use('/api', apiRoutes);        // ADDED - General path last
 
 app.get('/', (req, res) => {
     res.send('Minimal server is running!');
