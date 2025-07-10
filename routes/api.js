@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const Conversation = require('../models/Conversation');
-const OnboardingSession = require('../models/OnboardingSession'); // ADDED
+const OnboardingSession = require('../models/OnboardingSession');
 
 // For now, we will mock the user login. In a real app, you'd implement JWT authentication.
 const MOCK_USER_ID = "66a9f0f67077a9a3b3c3f915"; // Replace with an actual ID from your DB later
@@ -21,8 +21,8 @@ router.post('/login', async (req, res) => {
                 avatarUrl: 'https://picsum.photos/seed/janedoe/100/100',
                 business: {
                     name: "Jane's Barbershop",
-                    googleSheetId: 'YOUR_GOOGLE_SHEET_ID_HERE', // <-- IMPORTANT: Put your client's sheet ID here
-                    instagramPageId: 'YOUR_INSTAGRAM_PAGE_ID_HERE', // <-- IMPORTANT
+                    googleSheetId: 'YOUR_GOOGLE_SHEET_ID_HERE',
+                    instagramPageId: 'YOUR_INSTAGRAM_PAGE_ID_HERE',
                 }
             });
         }
@@ -34,11 +34,9 @@ router.post('/login', async (req, res) => {
 });
 
 // GET /api/conversations/:platform - NOW DYNAMIC
-// Expects a userId to be passed as a query parameter, like:
-// /api/conversations/instagram?userId=12345
 router.get('/conversations/:platform', async (req, res) => {
     const { platform } = req.params;
-    const { userId } = req.query; // Get userId from query params
+    const { userId } = req.query;
 
     if (!userId) {
         return res.status(400).json({ error: 'User ID is required' });
@@ -60,7 +58,6 @@ router.get('/conversations/:platform', async (req, res) => {
 router.get('/platform/:platform/status', async (req, res) => {
     const { platform } = req.params;
     try {
-        // TODO: Replace MOCK_USER_ID with authenticated user ID
         const user = await User.findById(MOCK_USER_ID);
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
@@ -80,14 +77,12 @@ router.patch('/platform/:platform/toggle-ai', async (req, res) => {
     const { platform } = req.params;
     const { isEnabled } = req.body;
     try {
-        // TODO: Replace MOCK_USER_ID with authenticated user ID
         const user = await User.findById(MOCK_USER_ID);
         if (!user) return res.status(404).json({ error: 'User not found' });
 
         user.business.platformAiStatus[platform] = isEnabled;
         await user.save();
         
-        // Also update all conversations for that user and platform
         await Conversation.updateMany(
             { userId: MOCK_USER_ID, platform },
             { $set: { isAiEnabled: isEnabled } }
@@ -135,7 +130,7 @@ router.get('/user/:id', async (req, res) => {
     }
 });
 
-// POST /api/finalize-onboarding - NEW ENDPOINT
+// POST /api/finalize-onboarding
 router.post('/finalize-onboarding', async (req, res) => {
     const { sessionId, selectedPageId } = req.body;
 
@@ -144,21 +139,18 @@ router.post('/finalize-onboarding', async (req, res) => {
     }
 
     try {
-        // 1. Find the temporary session
         const session = await OnboardingSession.findById(sessionId);
         if (!session) {
             return res.status(404).json({ error: 'Onboarding session not found or expired.' });
         }
 
-        // 2. Find the specific page the user selected from the session's page list
         const selectedPage = session.pages.find(p => p.id === selectedPageId);
         if (!selectedPage) {
             return res.status(400).json({ error: 'Selected page not found in session.' });
         }
 
-        // 3. Create or Update the permanent User record
         const user = await User.findOneAndUpdate(
-            { email: session.email }, // Use email as the primary key for finding the user
+            { email: session.email },
             {
                 name: session.name,
                 email: session.email,
@@ -166,21 +158,31 @@ router.post('/finalize-onboarding', async (req, res) => {
                 'business.facebookUserId': session.facebookUserId,
                 'business.instagramPageId': selectedPage.id,
                 'business.instagramPageAccessToken': selectedPage.access_token,
-                // You can collect this in a later step, for now use a placeholder
                 'business.googleSheetId': '1UH8Bwx14AkI5bvtKdUDTjCmtgDlZmM-DWeVhe1HUuiA',
             },
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
-        // 4. Delete the temporary session
         await OnboardingSession.findByIdAndDelete(sessionId);
-
-        // 5. Send the complete user object back to the frontend
         res.json(user);
 
     } catch (error) {
         console.error('[FINALIZE ERROR]', error);
         res.status(500).json({ error: 'Failed to finalize onboarding.' });
+    }
+});
+
+// GET /api/onboarding-session/:id - NEW ENDPOINT
+router.get('/onboarding-session/:id', async (req, res) => {
+    try {
+        const session = await OnboardingSession.findById(req.params.id);
+        if (!session) {
+            return res.status(404).json({ error: 'Session not found or expired.' });
+        }
+        res.json(session);
+    } catch (error) {
+        console.error('[ONBOARDING SESSION ERROR]', error);
+        res.status(500).json({ error: 'Failed to fetch session.' });
     }
 });
 
