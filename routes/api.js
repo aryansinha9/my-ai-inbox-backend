@@ -3,6 +3,7 @@ const router = express.Router();
 const User = require('../models/User');
 const Conversation = require('../models/Conversation');
 const OnboardingSession = require('../models/OnboardingSession');
+const { OpenAI } = require('openai'); // ADDED IMPORT
 
 // For now, we will mock the user login. In a real app, you'd implement JWT authentication.
 const MOCK_USER_ID = "66a9f0f67077a9a3b3c3f915"; // Replace with an actual ID from your DB later
@@ -183,6 +184,47 @@ router.get('/onboarding-session/:id', async (req, res) => {
     } catch (error) {
         console.error('[ONBOARDING SESSION ERROR]', error);
         res.status(500).json({ error: 'Failed to fetch session.' });
+    }
+});
+
+// POST /api/suggest-reply - NEW ENDPOINT for manual AI suggestions
+router.post('/suggest-reply', async (req, res) => {
+    const { prompt } = req.body;
+    if (!prompt) {
+        return res.status(400).json({ error: 'A prompt is required.' });
+    }
+
+    try {
+        // Initialize OpenAI client with API key from environment
+        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        
+        // Create chat completion
+        const completion = await openai.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            messages: [
+                { 
+                    role: "system", 
+                    content: "You are a helpful business assistant. Write a short, friendly, professional reply." 
+                },
+                { 
+                    role: "user", 
+                    content: prompt 
+                }
+            ],
+            max_tokens: 80, // Limit response length
+        });
+
+        // Extract and clean the generated reply
+        const reply = completion.choices[0].message.content.trim();
+        
+        // Return the suggestion
+        res.json({ reply });
+
+    } catch (error) {
+        console.error('[SUGGEST REPLY ERROR]', error);
+        res.status(500).json({ 
+            error: "Failed to generate AI suggestion. Check your OpenAI API key and usage limits." 
+        });
     }
 });
 
