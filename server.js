@@ -21,60 +21,53 @@ mongoose.connect(process.env.MONGO_URI)
         process.exit(1);
     });
 
-// 3. Middleware - UPDATED CORS CONFIGURATION
+// 3. Middleware
 
-// Define the list of trusted frontend origins
+// --- The New, Robust Middleware Configuration ---
+
+// Define the list of trusted frontend origins. Using the env variable is best practice.
 const allowedOrigins = [
     'http://localhost:5173', // For local development
-    process.env.FRONTEND_URL, // Production Vercel site
-    'https://*.vercel.app'   // Wildcard for all Vercel deployments
+    process.env.FRONTEND_URL   // For the deployed Vercel site
 ];
 
-// Custom CORS origin check function
-const originCheck = (origin, callback) => {
-    // Allow requests with no origin (server-to-server)
-    if (!origin) return callback(null, true);
-    
-    // Check exact matches
-    if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-    }
-    
-    // Check wildcard patterns
-    if (allowedOrigins.some(pattern => {
-        if (pattern.startsWith('https://*.')) {
-            const domain = pattern.split('*.')[1];
-            return origin.endsWith(domain);
-        }
-        return false;
-    })) {
-        return callback(null, true);
-    }
-    
-    callback(new Error(`Not allowed by CORS: ${origin}`));
-};
-
 const corsOptions = {
-    origin: originCheck,
-    credentials: true,
-    optionsSuccessStatus: 200
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl) and requests from our trusted list.
+        if (!origin || allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+        
+        // Also allow Vercel preview URLs, which have a dynamic hash.
+        if (origin.startsWith('https://my-ai-inbox-frontend-') && origin.endsWith('.vercel.app')) {
+            return callback(null, true);
+        }
+        
+        // If the origin is not in our list, reject it.
+        console.log(`[CORS] Blocked request from unauthorized origin: ${origin}`);
+        return callback(new Error('This origin is not allowed by CORS.'));
+    },
+    credentials: true
 };
 
-// Apply CORS middleware
-app.use(cors(corsOptions));
-
-// Handle preflight requests for all routes
-app.options('*', cors(corsOptions));
-
-// Request logging middleware (for debugging)
+// **CRITICAL DEBUGGING MIDDLEWARE:** This will log every single incoming request.
 app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} | Origin: ${req.headers.origin || 'none'}`);
+    console.log(`[REQUEST] Method: ${req.method} | Path: ${req.originalUrl} | Origin: ${req.headers.origin || 'None'}`);
     next();
 });
+
+// Handle preflight requests across all routes
+app.options('*', cors(corsOptions));
+
+// Apply CORS middleware for all other requests
+app.use(cors(corsOptions));
 
 // Body parsers
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// --- End of Middleware Configuration ---
+
 
 // 4. Routes
 app.use('/api', apiRoutes);
@@ -89,5 +82,5 @@ app.get('/', (req, res) => {
 // 5. Start the Server
 app.listen(PORT, () => {
     console.log(`CEO Backend server is listening on port ${PORT}`);
-    console.log(`Allowed CORS origins: ${allowedOrigins.join(', ')}`);
+    console.log(`Allowed CORS origins for direct match: ${allowedOrigins.join(', ')}`);
 });
