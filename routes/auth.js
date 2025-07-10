@@ -19,17 +19,26 @@ async function getUserProfile(accessToken) {
 async function getLongLivedUserToken(code) {
     // Exchange code for short-lived token
     const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token`;
-    const tokenParams = { client_id: FB_APP_ID, redirect_uri: REDIRECT_URI, client_secret: FB_APP_SECRET, code };
+    const tokenParams = {
+        client_id: FB_APP_ID,
+        redirect_uri: REDIRECT_URI,
+        client_secret: FB_APP_SECRET,
+        code
+    };
     const tokenResponse = await axios.get(tokenUrl, { params: tokenParams });
     const shortLivedToken = tokenResponse.data.access_token;
 
     // Exchange short-lived for long-lived token
     const longLivedUrl = `https://graph.facebook.com/v19.0/oauth/access_token`;
-    const longLivedParams = { grant_type: 'fb_exchange_token', client_id: FB_APP_ID, client_secret: FB_APP_SECRET, fb_exchange_token: shortLivedToken };
+    const longLivedParams = {
+        grant_type: 'fb_exchange_token',
+        client_id: FB_APP_ID,
+        client_secret: FB_APP_SECRET,
+        fb_exchange_token: shortLivedToken
+    };
     const longLivedResponse = await axios.get(longLivedUrl, { params: longLivedParams });
     return longLivedResponse.data.access_token;
 }
-
 
 // Route #1: Kicks off the OAuth flow
 router.get('/instagram', (req, res) => {
@@ -38,6 +47,7 @@ router.get('/instagram', (req, res) => {
         console.error('[DEBUG] FATAL: Facebook App ID is not set.');
         return res.status(500).send('Configuration Error: Facebook App ID is not set on the server.');
     }
+    
     const scopes = [
         'instagram_basic',
         'instagram_manage_messages',
@@ -47,6 +57,7 @@ router.get('/instagram', (req, res) => {
         'email',
         'public_profile'
     ];
+    
     const scopeString = scopes.join(',');
     const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${FB_APP_ID}&redirect_uri=${REDIRECT_URI}&scope=${scopeString}`;
     console.log('[DEBUG] Redirecting user to Facebook...');
@@ -91,15 +102,20 @@ router.get('/instagram/callback', async (req, res) => {
         // Step 4: Find or Create the user in our database
         console.log(`[DEBUG] Step 4: Finding/Creating user for Facebook ID ${profile.id}`);
         const user = await User.findOneAndUpdate(
-            { 'business.facebookUserId': profile.id },
             { 
-              name: profile.name,
-              email: profile.email,
-              avatarUrl: profile.picture.data.url,
-              'business.instagramPageId': pageId,
-              'business.instagramPageAccessToken': pageAccessToken,
-              // IMPORTANT: In a real app, this would be collected in an onboarding step.
-              'business.googleSheetId': 'YOUR_DEFAULT_GOOGLE_SHEET_ID_HERE', 
+                $or: [
+                    { 'business.facebookUserId': profile.id },
+                    { email: profile.email }
+                ]
+            },
+            { 
+                name: profile.name,
+                email: profile.email,
+                avatarUrl: profile.picture.data.url,
+                'business.facebookUserId': profile.id, // Always update the facebookUserId
+                'business.instagramPageId': pageId,
+                'business.instagramPageAccessToken': pageAccessToken,
+                'business.googleSheetId': '1UH8Bwx14AkI5bvtKdUDTjCmtgDlZmM-DWeVhe1HUuiA', // Use your real Sheet ID
             },
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
