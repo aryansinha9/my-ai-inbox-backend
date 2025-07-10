@@ -133,13 +133,23 @@ async function processInstagramMessage(event) {
 // Upgraded function to call our Python Microservice with the page token
 async function callPythonAiService(customerId, messageText, sheetId, pageAccessToken) {
     try {
+        // Validate environment variable
+        if (!PYTHON_API_BASE_URL) {
+            throw new Error("PYTHON_API_BASE_URL environment variable not set or is empty!");
+        }
+
+        // Construct and log the target URL
+        const finalUrl = `${PYTHON_API_BASE_URL}/api/process-message`;
+        console.log(`[Webhook] Preparing to call Python AI. Constructed URL: ${finalUrl}`);
+
+        // Make the API request
         await axios.post(
-            `${PYTHON_API_BASE_URL}/api/process-message`,
+            finalUrl,
             {
-                user_id: customerId, // This is the ID of the end-user/customer
+                user_id: customerId,
                 message_text: messageText,
                 sheet_id: sheetId,
-                page_access_token: pageAccessToken // Pass the required token
+                page_access_token: pageAccessToken
             },
             {
                 headers: {
@@ -150,7 +160,10 @@ async function callPythonAiService(customerId, messageText, sheetId, pageAccessT
         );
         console.log('[Webhook] Successfully called Python service.');
     } catch (error) {
-        const errorMsg = error.response ? error.response.data : error.message;
+        // Enhanced error logging
+        const errorMsg = error.response 
+            ? JSON.stringify(error.response.data) 
+            : error.message;
         console.error('[Webhook] FAILED to call Python AI service:', errorMsg);
     }
 }
