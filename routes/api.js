@@ -13,7 +13,7 @@ router.post('/login', async (req, res) => {
     try {
         // In a real app, you would find user by email and verify password
         // For now, let's create/find a dummy user to work with
-        let user = await User.findOne({ email: '' });
+        let user = await User.findOne({ email: 'jane.doe@example.com' });
         if (!user) {
             user = await User.create({
                 _id: MOCK_USER_ID,
