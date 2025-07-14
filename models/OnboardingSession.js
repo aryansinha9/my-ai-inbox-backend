@@ -13,7 +13,7 @@ const onboardingSessionSchema = new mongoose.Schema({
     avatarUrl: { type: String },
     pages: [pageSchema],
     // The session will automatically expire after 15 minutes
-    createdAt: { type: Date, expires: '15m', default: Date.now }
+    createdAt: { type: Date, expires: '45m', default: Date.now }
 });
 
 module.exports = mongoose.model('OnboardingSession', onboardingSessionSchema);
