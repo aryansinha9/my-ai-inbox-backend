@@ -159,7 +159,7 @@ router.post('/finalize-onboarding', async (req, res) => {
                 'business.facebookUserId': session.facebookUserId,
                 'business.instagramPageId': selectedPage.id,
                 'business.instagramPageAccessToken': selectedPage.access_token,
-                'business.googleSheetId': '1UH8Bwx14AkI5bvtKdUDTjCmtgDlZmM-DWeVhe1HUuiA',
+                'business.googleSheetId': 'NEEDS_ASSIGNMENT',
             },
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
