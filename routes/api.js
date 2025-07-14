@@ -150,18 +150,24 @@ router.post('/finalize-onboarding', async (req, res) => {
     }
 
     const user = await User.findOneAndUpdate(
-      { email: session.email },
-      {
-        name: session.name,
-        email: session.email,
-        avatarUrl: session.avatarUrl,
-        'business.facebookUserId': session.facebookUserId,
-        'business.instagramPageId': selectedPage.id,
-        'business.instagramPageAccessToken': selectedPage.access_token,
-        'business.googleSheetId': '1UH8Bwx14AkI5bvtKdUDTjCmtgDlZmM-DWeVhe1HUuiA',
-      },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
+    { email: session.email }, // Find the user by their email
+    {
+        // === Fields to update EVERY time they log in ===
+        $set: {
+            name: session.name,
+            avatarUrl: session.avatarUrl,
+            'business.facebookUserId': session.facebookUserId,
+            'business.instagramPageId': selectedPage.id,
+            'business.instagramPageAccessToken': selectedPage.access_token,
+        },
+        // === Fields to set ONLY on the very first time ===
+        $setOnInsert: {
+            email: session.email, // The email is permanent and should only be set once
+            'business.googleSheetId': '1UH8Bwx14AkI5bvtKdUDTjCmtgDlZmM-DWeVhe1HUuiA', // The default sheet ID
+        }
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true } // Options remain the same
+);
 
     await OnboardingSession.findByIdAndDelete(sessionId);
     res.json(user);
