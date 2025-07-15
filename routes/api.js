@@ -39,14 +39,11 @@ router.post('/login', async (req, res) => {
 router.get('/conversations/:platform', async (req, res) => {
     const { platform } = req.params;
     const { userId } = req.query;
-
     if (!userId) {
         return res.status(400).json({ error: 'User ID is required' });
     }
-
     try {
-        const conversations = await Conversation.find({ userId: userId, platform: platform })
-            .sort({ lastMessageTimestamp: -1 });
+        const conversations = await Conversation.find({ userId, platform }).sort({ lastMessageTimestamp: -1 });
         res.json(conversations);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch conversations' });
@@ -84,13 +81,8 @@ router.patch('/conversations/:id/toggle-ai', async (req, res) => {
     const { id } = req.params;
     const { isEnabled } = req.body;
     try {
-        console.log(`[AUDIT] AI for conversation ${id} was set to: ${isEnabled}`);
-        const updatedConversation = await Conversation.findByIdAndUpdate(
-            id, { isAiEnabled: isEnabled }, { new: true }
-        );
-        if (!updatedConversation) {
-            return res.status(404).json({ error: 'Conversation not found' });
-        }
+        const updatedConversation = await Conversation.findByIdAndUpdate(id, { isAiEnabled: isEnabled }, { new: true });
+        if (!updatedConversation) return res.status(404).json({ error: 'Conversation not found' });
         res.json(updatedConversation);
     } catch (error) {
         res.status(500).json({ error: 'Failed to update conversation' });
@@ -100,9 +92,7 @@ router.patch('/conversations/:id/toggle-ai', async (req, res) => {
 router.get('/user/:id', async (req, res) => {
     try {
         const user = await User.findById(req.params.id);
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
+        if (!user) return res.status(404).json({ error: 'User not found' });
         res.json(user);
     } catch (error) {
         res.status(500).json({ error: 'Internal server error' });
@@ -112,33 +102,18 @@ router.get('/user/:id', async (req, res) => {
 router.post('/finalize-onboarding', async (req, res) => {
     const { sessionId, selectedPageId, agreedToTerms } = req.body;
 
-    if (!agreedToTerms) {
-        return res.status(400).json({ error: 'You must agree to the Terms and Conditions to continue.' });
-    }
-    if (!sessionId || !selectedPageId) {
-        return res.status(400).json({ error: 'Session ID and Selected Page ID are required.' });
-    }
+    if (!agreedToTerms) return res.status(400).json({ error: 'You must agree to the Terms and Conditions to continue.' });
+    if (!sessionId || !selectedPageId) return res.status(400).json({ error: 'Session ID and Selected Page ID are required.' });
 
     try {
         const session = await OnboardingSession.findById(sessionId);
-        if (!session) {
-            return res.status(404).json({ error: 'Onboarding session not found or expired. Please log in again.' });
-        }
+        if (!session) return res.status(404).json({ error: 'Onboarding session not found or expired. Please log in again.' });
 
         const selectedPage = session.pages.find(p => p.id === selectedPageId);
-        if (!selectedPage) {
-            return res.status(400).json({ error: 'Selected page not found in session.' });
-        }
+        if (!selectedPage) return res.status(400).json({ error: 'Selected page not found in session.' });
 
-        // --- ADDED VALIDATION BLOCK ---
-        // Check for required information before attempting to save the user.
-        if (!session.email) {
-            return res.status(400).json({ error: 'Could not retrieve email from your social profile. Please ensure it is public and try again.' });
-        }
-        if (!session.name) {
-            return res.status(400).json({ error: 'Could not retrieve name from your social profile. Please ensure it is public and try again.' });
-        }
-        // --- END OF VALIDATION BLOCK ---
+        if (!session.email) return res.status(400).json({ error: 'Could not retrieve email from your social profile. Please ensure it is public and try again.' });
+        if (!session.name) return res.status(400).json({ error: 'Could not retrieve name from your social profile. Please ensure it is public and try again.' });
 
         const user = await User.findOneAndUpdate(
             { email: session.email },
@@ -164,10 +139,24 @@ router.post('/finalize-onboarding', async (req, res) => {
 
     } catch (error) {
         console.error('[FINALIZE ERROR]', error);
-        // Provide a more specific error if it's a validation error
+
+        // --- THIS IS THE NEW, CRITICAL ERROR HANDLING ---
+        // Check for MongoDB duplicate key error
+        if (error.code === 11000) {
+            // Check which key caused the error
+            if (error.keyPattern && error.keyPattern['business.instagramPageId']) {
+                return res.status(409).json({ error: 'This Instagram Page is already connected to another account.' });
+            }
+            if (error.keyPattern && error.keyPattern.email) {
+                return res.status(409).json({ error: 'An account with this email already exists but could not be updated.' });
+            }
+        }
+        
         if (error.name === 'ValidationError') {
             return res.status(400).json({ error: 'A required field was missing. Please try logging in again.' });
         }
+        
+        // Generic fallback for all other errors
         res.status(500).json({ error: 'An unexpected error occurred on the server.' });
     }
 });
@@ -175,9 +164,7 @@ router.post('/finalize-onboarding', async (req, res) => {
 router.get('/onboarding-session/:id', async (req, res) => {
     try {
         const session = await OnboardingSession.findById(req.params.id);
-        if (!session) {
-            return res.status(404).json({ error: 'Session not found or expired.' });
-        }
+        if (!session) return res.status(404).json({ error: 'Session not found or expired.' });
         res.json(session);
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch session.' });
@@ -186,15 +173,14 @@ router.get('/onboarding-session/:id', async (req, res) => {
 
 router.post('/suggest-reply', async (req, res) => {
     const { prompt } = req.body;
-    if (!prompt) {
-        return res.status(400).json({ error: 'A prompt is required.' });
-    }
+    if (!prompt) return res.status(400).json({ error: 'A prompt is required.' });
+
     try {
         const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
         const completion = await openai.chat.completions.create({
             model: "gpt-3.5-turbo",
             messages: [
-                { role: "system", content: "You are a helpful business assistant. Write a short, friendly, professional reply." },
+                { role: "system", content: "You are a helpful business assistant..." },
                 { role: "user", content: prompt }
             ],
             max_tokens: 80,
@@ -202,8 +188,7 @@ router.post('/suggest-reply', async (req, res) => {
         const reply = completion.choices[0].message.content.trim();
         res.json({ reply });
     } catch (error) {
-        console.error('[SUGGEST REPLY ERROR]', error);
-        res.status(500).json({ error: "Failed to generate AI suggestion. Check your OpenAI API key and usage limits." });
+        res.status(500).json({ error: "Failed to generate AI suggestion." });
     }
 });
 
