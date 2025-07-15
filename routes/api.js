@@ -132,7 +132,10 @@ router.get('/user/:id', async (req, res) => {
 
 // POST /api/finalize-onboarding
 router.post('/finalize-onboarding', async (req, res) => {
-  const { sessionId, selectedPageId } = req.body;
+  const { sessionId, selectedPageId, agreedToTerms } = req.body;
+
+  if (!agreedToTerms) {
+        return res.status(400).json({ error: 'You must agree to the Terms and Conditions to continue.' });
 
   if (!sessionId || !selectedPageId) {
     return res.status(400).json({ error: 'Session ID and Selected Page ID are required.' });
@@ -164,6 +167,7 @@ router.post('/finalize-onboarding', async (req, res) => {
         $setOnInsert: {
             email: session.email, // The email is permanent and should only be set once
             'business.googleSheetId': '1UH8Bwx14AkI5bvtKdUDTjCmtgDlZmM-DWeVhe1HUuiA', // The default sheet ID
+            'termsAgreement': { agreedAt: new Date(), version: '1.0.0' }
         }
     },
     { upsert: true, new: true, setDefaultsOnInsert: true } // Options remain the same
