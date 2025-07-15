@@ -1,4 +1,4 @@
-// backend/routes/api.js
+// backend/routes/api.js -> FULL DIAGNOSTIC VERSION
 
 const express = require('express');
 const router = express.Router();
@@ -100,63 +100,87 @@ router.get('/user/:id', async (req, res) => {
 });
 
 router.post('/finalize-onboarding', async (req, res) => {
+    // --- STEP 1: LOG THE INITIAL REQUEST ---
+    console.log('[FINALIZE] Received request to finalize onboarding.');
     const { sessionId, selectedPageId, agreedToTerms } = req.body;
+    console.log(`[FINALIZE] Session ID: ${sessionId}, Page ID: ${selectedPageId}, Agreed: ${agreedToTerms}`);
 
     if (!agreedToTerms) return res.status(400).json({ error: 'You must agree to the Terms and Conditions to continue.' });
     if (!sessionId || !selectedPageId) return res.status(400).json({ error: 'Session ID and Selected Page ID are required.' });
 
     try {
+        // --- STEP 2: LOG THE DATABASE SESSION RETRIEVAL ---
+        console.log('[FINALIZE] Attempting to find OnboardingSession in database...');
         const session = await OnboardingSession.findById(sessionId);
-        if (!session) return res.status(404).json({ error: 'Onboarding session not found or expired. Please log in again.' });
+        if (!session) {
+            console.error('[FINALIZE] FATAL: Onboarding session not found in DB.');
+            return res.status(404).json({ error: 'Onboarding session not found or expired. Please log in again.' });
+        }
+        console.log('[FINALIZE] Success! Found OnboardingSession. Logging entire session object:');
+        console.log(JSON.stringify(session, null, 2));
 
         const selectedPage = session.pages.find(p => p.id === selectedPageId);
-        if (!selectedPage) return res.status(400).json({ error: 'Selected page not found in session.' });
+        if (!selectedPage) {
+            console.error('[FINALIZE] FATAL: Selected page ID not found within the session pages array.');
+            return res.status(400).json({ error: 'Selected page not found in session.' });
+        }
+        console.log('[FINALIZE] Success! Found selected page. Logging selected page object:');
+        console.log(JSON.stringify(selectedPage, null, 2));
 
-        if (!session.email) return res.status(400).json({ error: 'Could not retrieve email from your social profile. Please ensure it is public and try again.' });
-        if (!session.name) return res.status(400).json({ error: 'Could not retrieve name from your social profile. Please ensure it is public and try again.' });
+        // --- STEP 3: LOG THE DATA JUST BEFORE THE FINAL DATABASE WRITE ---
+        console.log('[FINALIZE] All checks passed. Preparing data for final user creation...');
+        const finalUserData = {
+            name: session.name,
+            email: session.email,
+            avatarUrl: session.avatarUrl,
+            facebookUserId: session.facebookUserId,
+            instagramPageId: selectedPage.id,
+            instagramPageAccessToken: selectedPage.access_token,
+        };
+        console.log('[FINALIZE] Data to be written to User model:');
+        console.log(JSON.stringify(finalUserData, null, 2));
 
+        // --- STEP 4: ATTEMPT THE DATABASE WRITE ---
+        console.log('[FINALIZE] Executing User.findOneAndUpdate...');
         const user = await User.findOneAndUpdate(
             { email: session.email },
             {
                 $set: {
-                    name: session.name,
-                    avatarUrl: session.avatarUrl,
-                    'business.facebookUserId': session.facebookUserId,
-                    'business.instagramPageId': selectedPage.id,
-                    'business.instagramPageAccessToken': selectedPage.access_token,
+                    name: finalUserData.name,
+                    avatarUrl: finalUserData.avatarUrl,
+                    'business.facebookUserId': finalUserData.facebookUserId,
+                    'business.instagramPageId': finalUserData.instagramPageId,
+                    'business.instagramPageAccessToken': finalUserData.instagramPageAccessToken,
                 },
                 $setOnInsert: {
-                    email: session.email,
+                    email: finalUserData.email,
                     'business.googleSheetId': '1UH8Bwx14AkI5bvtKdUDTjCmtgDlZmM-DWeVhe1HUuiA',
                     'termsAgreement': { agreedAt: new Date(), version: '1.0.0' }
                 }
             },
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
+        console.log('[FINALIZE] SUCCESS! User document created/updated.');
 
         await OnboardingSession.findByIdAndDelete(sessionId);
+        console.log('[FINALIZE] Onboarding session deleted. Sending success response to frontend.');
         res.json(user);
 
     } catch (error) {
-        console.error('[FINALIZE ERROR]', error);
-
-        // --- THIS IS THE NEW, CRITICAL ERROR HANDLING ---
-        // Check for MongoDB duplicate key error
+        // --- STEP 5: LOG THE EXACT ERROR ---
+        console.error('--- [FINALIZE] CRITICAL ERROR CAUGHT ---');
+        console.error(`Error Name: ${error.name}`);
+        console.error(`Error Code: ${error.code}`);
+        console.error(`Error Message: ${error.message}`);
+        console.error('Full Error Object:', error);
+        console.error('--- END OF CRITICAL ERROR ---');
+        
         if (error.code === 11000) {
-            // Check which key caused the error
             if (error.keyPattern && error.keyPattern['business.instagramPageId']) {
                 return res.status(409).json({ error: 'This Instagram Page is already connected to another account.' });
             }
-            if (error.keyPattern && error.keyPattern.email) {
-                return res.status(409).json({ error: 'An account with this email already exists but could not be updated.' });
-            }
         }
         
-        if (error.name === 'ValidationError') {
-            return res.status(400).json({ error: 'A required field was missing. Please try logging in again.' });
-        }
-        
-        // Generic fallback for all other errors
         res.status(500).json({ error: 'An unexpected error occurred on the server.' });
     }
 });
