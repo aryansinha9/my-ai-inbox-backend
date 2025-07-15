@@ -1,3 +1,5 @@
+// backend/routes/api.js
+
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
@@ -10,229 +12,224 @@ const MOCK_USER_ID = "66a9f0f67077a9a3b3c3f915"; // Replace with an actual ID fr
 
 // POST /api/login - (Currently a mock, returns a hardcoded user)
 router.post('/login', async (req, res) => {
-  try {
-    // In a real app, you would find user by email and verify password
-    // For now, let's create/find a dummy user to work with
-    let user = await User.findOne({ email: 'jane.doe@example.com' });
-    if (!user) {
-      user = await User.create({
-        _id: MOCK_USER_ID,
-        name: 'Jane Doe',
-        email: 'jane.doe@example.com',
-        avatarUrl: 'https://picsum.photos/seed/janedoe/100/100',
-        business: {
-          name: "Jane's Barbershop",
-          googleSheetId: 'YOUR_GOOGLE_SHEET_ID_HERE',
-          instagramPageId: 'YOUR_INSTAGRAM_PAGE_ID_HERE',
+    try {
+        // In a real app, you would find user by email and verify password
+        // For now, let's create/find a dummy user to work with
+        let user = await User.findOne({ email: 'jane.doe@example.com' });
+        if (!user) {
+            user = await User.create({
+                _id: MOCK_USER_ID,
+                name: 'Jane Doe',
+                email: 'jane.doe@example.com',
+                avatarUrl: 'https://picsum.photos/seed/janedoe/100/100',
+                business: {
+                    name: "Jane's Barbershop",
+                    googleSheetId: 'YOUR_GOOGLE_SHEET_ID_HERE',
+                    instagramPageId: 'YOUR_INSTAGRAM_PAGE_ID_HERE',
+                    instagramPageAccessToken: 'DUMMY_TOKEN' // Added dummy token to satisfy model requirement
+                },
+                // Added dummy termsAgreement to satisfy model requirement
+                termsAgreement: {
+                    agreedAt: new Date()
+                }
+            });
         }
-      });
+        res.json(user);
+    } catch (error) {
+        console.error("Login error:", error);
+        res.status(500).json({ error: 'Internal server error' });
     }
-    res.json(user);
-  } catch (error) {
-    console.error("Login error:", error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
 });
 
-// GET /api/conversations/:platform - NOW DYNAMIC
+// GET /api/conversations/:platform
 router.get('/conversations/:platform', async (req, res) => {
-  const { platform } = req.params;
-  const { userId } = req.query;
+    const { platform } = req.params;
+    const { userId } = req.query;
 
-  if (!userId) {
-    return res.status(400).json({ error: 'User ID is required' });
-  }
+    if (!userId) {
+        return res.status(400).json({ error: 'User ID is required' });
+    }
 
-  try {
-    console.log(`[API] Fetching conversations for user ${userId} on platform ${platform}`);
-    const conversations = await Conversation.find({ userId: userId, platform: platform })
-      .sort({ lastMessageTimestamp: -1 });
-    
-    console.log(`[API] Found ${conversations.length} conversations.`);
-    res.json(conversations);
-  } catch (error) {
-    console.error(`[API] Error fetching conversations for user ${userId}:`, error);
-    res.status(500).json({ error: 'Failed to fetch conversations' });
-  }
+    try {
+        console.log(`[API] Fetching conversations for user ${userId} on platform ${platform}`);
+        const conversations = await Conversation.find({ userId: userId, platform: platform })
+            .sort({ lastMessageTimestamp: -1 });
+        
+        console.log(`[API] Found ${conversations.length} conversations.`);
+        res.json(conversations);
+    } catch (error) {
+        console.error(`[API] Error fetching conversations for user ${userId}:`, error);
+        res.status(500).json({ error: 'Failed to fetch conversations' });
+    }
 });
 
+// GET /api/platform/:platform/status
 router.get('/platform/:platform/status', async (req, res) => {
-  const { platform } = req.params;
-  try {
-    const user = await User.findById(MOCK_USER_ID);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+    const { platform } = req.params;
+    try {
+        const user = await User.findById(MOCK_USER_ID);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        const isEnabled = user.business.platformAiStatus[platform];
+        res.json({ success: true, isEnabled });
+
+    } catch (error) {
+        console.error(`Error fetching platform AI status for ${platform}:`, error);
+        res.status(500).json({ error: 'Failed to fetch platform AI status' });
     }
-    
-    const isEnabled = user.business.platformAiStatus[platform];
-    res.json({ success: true, isEnabled });
-  } catch (error) {
-    console.error(`Error fetching platform AI status for ${platform}:`, error);
-    res.status(500).json({ error: 'Failed to fetch platform AI status' });
-  }
 });
 
 // PATCH /api/platform/:platform/toggle-ai
 router.patch('/platform/:platform/toggle-ai', async (req, res) => {
-  const { platform } = req.params;
-  const { isEnabled } = req.body;
-  try {
-    const user = await User.findById(MOCK_USER_ID);
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    const { platform } = req.params;
+    const { isEnabled } = req.body;
+    try {
+        const user = await User.findById(MOCK_USER_ID);
+        if (!user) return res.status(404).json({ error: 'User not found' });
 
-    user.business.platformAiStatus[platform] = isEnabled;
-    await user.save();
-    
-    await Conversation.updateMany(
-      { userId: MOCK_USER_ID, platform },
-      { $set: { isAiEnabled: isEnabled } }
-    );
-
-    res.json({ success: true, isEnabled });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to update platform AI status' });
-  }
+        user.business.platformAiStatus[platform] = isEnabled;
+        await user.save();
+        
+        res.json({ success: true, isEnabled });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update platform AI status' });
+    }
 });
 
 // PATCH /api/conversations/:id/toggle-ai
 router.patch('/conversations/:id/toggle-ai', async (req, res) => {
-  const { id } = req.params;
-  const { isEnabled } = req.body;
-  try {
-    const updatedConversation = await Conversation.findByIdAndUpdate(
-      id,
-      { isAiEnabled: isEnabled },
-      { new: true }
-    );
-    if (!updatedConversation) {
-      return res.status(404).json({ error: 'Conversation not found' });
+    const { id } = req.params;
+    const { isEnabled } = req.body;
+    try {
+        console.log(`[AUDIT] AI for conversation ${id} was set to: ${isEnabled}`);
+        const updatedConversation = await Conversation.findByIdAndUpdate(
+            id,
+            { isAiEnabled: isEnabled },
+            { new: true }
+        );
+        if (!updatedConversation) {
+            return res.status(404).json({ error: 'Conversation not found' });
+        }
+        res.json(updatedConversation);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update conversation' });
     }
-    res.json(updatedConversation);
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to update conversation' });
-  }
 });
 
-// GET /api/user/:id - Fetches a user's data by their database ID
+// GET /api/user/:id
 router.get('/user/:id', async (req, res) => {
-  try {
-    console.log(`[API] Received request to get user by ID: ${req.params.id}`);
-    const user = await User.findById(req.params.id);
-    if (!user) {
-      console.error(`[API] User with ID ${req.params.id} not found.`);
-      return res.status(404).json({ error: 'User not found' });
+    try {
+        console.log(`[API] Received request to get user by ID: ${req.params.id}`);
+        const user = await User.findById(req.params.id);
+        if (!user) {
+            console.error(`[API] User with ID ${req.params.id} not found.`);
+            return res.status(404).json({ error: 'User not found' });
+        }
+        console.log(`[API] Found user: ${user.email}`);
+        res.json(user);
+    } catch (error) {
+        console.error(`[API] Error fetching user by ID: ${req.params.id}`, error);
+        res.status(500).json({ error: 'Internal server error' });
     }
-    console.log(`[API] Found user: ${user.email}`);
-    res.json(user);
-  } catch (error) {
-    console.error(`[API] Error fetching user by ID: ${req.params.id}`, error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
 });
 
 // POST /api/finalize-onboarding
 router.post('/finalize-onboarding', async (req, res) => {
-  const { sessionId, selectedPageId, agreedToTerms } = req.body;
+    const { sessionId, selectedPageId, agreedToTerms } = req.body;
 
-  if (!agreedToTerms) {
+    if (!agreedToTerms) {
         return res.status(400).json({ error: 'You must agree to the Terms and Conditions to continue.' });
-
-  if (!sessionId || !selectedPageId) {
-    return res.status(400).json({ error: 'Session ID and Selected Page ID are required.' });
-  }
-
-  try {
-    const session = await OnboardingSession.findById(sessionId);
-    if (!session) {
-      return res.status(404).json({ error: 'Onboarding session not found or expired.' });
     }
 
-    const selectedPage = session.pages.find(p => p.id === selectedPageId);
-    if (!selectedPage) {
-      return res.status(400).json({ error: 'Selected page not found in session.' });
+    if (!sessionId || !selectedPageId) {
+        return res.status(400).json({ error: 'Session ID and Selected Page ID are required.' });
     }
 
-    const user = await User.findOneAndUpdate(
-    { email: session.email }, // Find the user by their email
-    {
-        // === Fields to update EVERY time they log in ===
-        $set: {
-            name: session.name,
-            avatarUrl: session.avatarUrl,
-            'business.facebookUserId': session.facebookUserId,
-            'business.instagramPageId': selectedPage.id,
-            'business.instagramPageAccessToken': selectedPage.access_token,
-        },
-        // === Fields to set ONLY on the very first time ===
-        $setOnInsert: {
-            email: session.email, // The email is permanent and should only be set once
-            'business.googleSheetId': '1UH8Bwx14AkI5bvtKdUDTjCmtgDlZmM-DWeVhe1HUuiA', // The default sheet ID
-            'termsAgreement': { agreedAt: new Date(), version: '1.0.0' }
+    try {
+        const session = await OnboardingSession.findById(sessionId);
+        if (!session) {
+            return res.status(404).json({ error: 'Onboarding session not found or expired.' });
         }
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true } // Options remain the same
-);
 
-    await OnboardingSession.findByIdAndDelete(sessionId);
-    res.json(user);
-  } catch (error) {
-    console.error('[FINALIZE ERROR]', error);
-    res.status(500).json({ error: 'Failed to finalize onboarding.' });
-  }
+        const selectedPage = session.pages.find(p => p.id === selectedPageId);
+        if (!selectedPage) {
+            return res.status(400).json({ error: 'Selected page not found in session.' });
+        }
+
+        const user = await User.findOneAndUpdate(
+            { email: session.email },
+            {
+                $set: {
+                    name: session.name,
+                    avatarUrl: session.avatarUrl,
+                    'business.facebookUserId': session.facebookUserId,
+                    'business.instagramPageId': selectedPage.id,
+                    'business.instagramPageAccessToken': selectedPage.access_token,
+                },
+                // --- THIS COMMA WAS THE SOURCE OF THE ERROR ---
+                $setOnInsert: {
+                    email: session.email,
+                    'business.googleSheetId': '1UH8Bwx14AkI5bvtKdUDTjCmtgDlZmM-DWeVhe1HUuiA',
+                    'termsAgreement': { agreedAt: new Date(), version: '1.0.0' }
+                }
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+
+        await OnboardingSession.findByIdAndDelete(sessionId);
+        res.json(user);
+
+    } catch (error) {
+        console.error('[FINALIZE ERROR]', error);
+        res.status(500).json({ error: 'Failed to finalize onboarding.' });
+    }
 });
 
-// GET /api/onboarding-session/:id - NEW ENDPOINT
+// GET /api/onboarding-session/:id
 router.get('/onboarding-session/:id', async (req, res) => {
-  try {
-    const session = await OnboardingSession.findById(req.params.id);
-    if (!session) {
-      return res.status(404).json({ error: 'Session not found or expired.' });
+    try {
+        const session = await OnboardingSession.findById(req.params.id);
+        if (!session) {
+            return res.status(404).json({ error: 'Session not found or expired.' });
+        }
+        res.json(session);
+    } catch (error) {
+        console.error('[ONBOARDING SESSION ERROR]', error);
+        res.status(500).json({ error: 'Failed to fetch session.' });
     }
-    res.json(session);
-  } catch (error) {
-    console.error('[ONBOARDING SESSION ERROR]', error);
-    res.status(500).json({ error: 'Failed to fetch session.' });
-  }
 });
 
-// POST /api/suggest-reply - NEW ENDPOINT for manual AI suggestions
+// POST /api/suggest-reply
 router.post('/suggest-reply', async (req, res) => {
-  const { prompt } = req.body;
-  if (!prompt) {
-    return res.status(400).json({ error: 'A prompt is required.' });
-  }
+    const { prompt } = req.body;
+    if (!prompt) {
+        return res.status(400).json({ error: 'A prompt is required.' });
+    }
 
-  try {
-    // Initialize OpenAI client with API key from environment
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    
-    // Create chat completion
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        { 
-          role: "system", 
-          content: "You are a helpful business assistant. Write a short, friendly, professional reply." 
-        },
-        { 
-          role: "user", 
-          content: prompt 
-        }
-      ],
-      max_tokens: 80, // Limit response length
-    });
+    try {
+        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+        
+        const completion = await openai.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            messages: [
+                { role: "system", content: "You are a helpful business assistant. Write a short, friendly, professional reply." },
+                { role: "user", content: prompt }
+            ],
+            max_tokens: 80,
+        });
 
-    // Extract and clean the generated reply
-    const reply = completion.choices[0].message.content.trim();
-    
-    // Return the suggestion
-    res.json({ reply });
-  } catch (error) {
-    console.error('[SUGGEST REPLY ERROR]', error);
-    res.status(500).json({ 
-      error: "Failed to generate AI suggestion. Check your OpenAI API key and usage limits." 
-    });
-  }
+        const reply = completion.choices[0].message.content.trim();
+        
+        res.json({ reply });
+
+    } catch (error) {
+        console.error('[SUGGEST REPLY ERROR]', error);
+        res.status(500).json({ 
+            error: "Failed to generate AI suggestion. Check your OpenAI API key and usage limits." 
+        });
+    }
 });
 
 module.exports = router;
