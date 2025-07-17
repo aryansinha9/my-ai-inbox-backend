@@ -133,12 +133,7 @@ async function processInstagramMessage(event) {
         }
 
         console.log(`[Webhook] All checks passed. Calling Python AI service.`);
-        await callPythonAiService(
-            customerId,
-            messageText,
-            client.business.googleSheetId,
-            client.business.instagramPageAccessToken
-        );
+        await callPythonAiService(customerId, messageText, client);
 
     } catch (error) {
         console.error('[Webhook] CRITICAL ERROR processing Instagram message:', error);
@@ -146,35 +141,35 @@ async function processInstagramMessage(event) {
 }
 
 // Upgraded function to call our Python Microservice with the page token
-async function callPythonAiService(customerId, messageText, sheetId, pageAccessToken) {
+async function callPythonAiService(customerId, messageText, client) {
     try {
         if (!PYTHON_API_BASE_URL) {
-            throw new Error("PYTHON_API_BASE_URL environment variable not set or is empty!");
+            throw new Error("PYTHON_API_BASE_URL environment variable not set!");
         }
 
         const finalUrl = `${PYTHON_API_BASE_URL}/api/process-message`;
-        console.log(`[Webhook] Preparing to call Python AI. Constructed URL: ${finalUrl}`);
-
-        await axios.post(
-            finalUrl,
-            {
-                user_id: customerId,
-                message_text: messageText,
-                sheet_id: sheetId,
-                page_access_token: pageAccessToken
-            },
-            {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Internal-API-Key': PYTHON_INTERNAL_API_KEY
-                }
+        console.log(`[Webhook] Preparing to call Python AI at: ${finalUrl}`);
+        
+        const payload = {
+            user_id: customerId,
+            message_text: messageText,
+            sheet_id: client.business.googleSheetId,
+            page_access_token: client.business.instagramPageAccessToken,
+            booking_integration: {
+                provider: client.business.bookingIntegration.provider,
+                api_key: client.business.bookingIntegration.apiKey
             }
-        );
+        };
+
+        await axios.post(finalUrl, payload, {
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Internal-API-Key': PYTHON_INTERNAL_API_KEY
+            }
+        });
         console.log('[Webhook] Successfully called Python service.');
     } catch (error) {
-        const errorMsg = error.response 
-            ? JSON.stringify(error.response.data) 
-            : error.message;
+        const errorMsg = error.response ? JSON.stringify(error.response.data) : error.message;
         console.error('[Webhook] FAILED to call Python AI service:', errorMsg);
     }
 }
