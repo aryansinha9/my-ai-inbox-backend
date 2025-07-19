@@ -65,67 +65,63 @@ router.get('/instagram', (req, res) => {
     res.redirect(authUrl);
 });
 
-// Route #2: The UPGRADED callback - Step 1 of Onboarding
+// THIS IS THE UPDATED CALLBACK FUNCTION
 router.get('/instagram/callback', async (req, res) => {
     const { code } = req.query;
-    console.log('[DEBUG] --- OAuth Callback Started (Page Selection Flow) ---');
+    console.log('[AUTH_CALLBACK] OAuth Callback Started.');
 
     if (!code) {
         return res.status(400).send('Error: No authorization code provided.');
     }
 
     try {
-        // Step 1: Get user token and profile
         const userAccessToken = await getLongLivedUserToken(code);
         const profile = await getUserProfile(userAccessToken);
-        console.log(`[DEBUG] Got profile for: ${profile.email}`);
 
-        // Step 2: Get ALL of the user's managed pages AND their linked Instagram accounts
-        // --- THIS IS THE FIX ---
+        // --- THIS IS THE NEW DECISION LOGIC ---
+        const hasEmail = profile.email && profile.email.length > 0;
+        console.log(`[AUTH_CALLBACK] Profile received for: ${profile.name}. Email provided: ${hasEmail}`);
+
         const fields = 'id,name,access_token,instagram_business_account{id,username,profile_picture_url}';
         const pagesUrl = `https://graph.facebook.com/me/accounts?fields=${fields}&access_token=${userAccessToken}`;
-        // --- END OF FIX ---
-        
         const pagesResponse = await axios.get(pagesUrl);
-        
-        // Filter out pages that do NOT have an Instagram account linked
         const userPagesWithIg = pagesResponse.data.data.filter(p => p.instagram_business_account);
 
         if (!userPagesWithIg || userPagesWithIg.length === 0) {
             return res.status(400).send("Could not find any Facebook Pages with a linked Instagram Business Account.");
         }
-        console.log(`[DEBUG] Found ${userPagesWithIg.length} pages with linked Instagram accounts.`);
 
-        // Step 3: Save this richer information to the temporary OnboardingSession
         const session = await OnboardingSession.findOneAndUpdate(
             { facebookUserId: profile.id },
             {
                 name: profile.name,
-                email: profile.email,
+                email: profile.email, // This will be null if not provided
                 avatarUrl: profile.picture.data.url,
-                // Now we save the Instagram details instead of the Facebook Page details
                 pages: userPagesWithIg.map(p => ({
-                    id: p.instagram_business_account.id, // Save the INSTAGRAM ID
-                    name: p.instagram_business_account.username, // Save the INSTAGRAM USERNAME
-                    access_token: p.access_token, // The Page Access Token is still what we need
-                    avatar: p.instagram_business_account.profile_picture_url // Save Instagram profile picture
+                    id: p.instagram_business_account.id,
+                    name: p.instagram_business_account.username,
+                    access_token: p.access_token,
+                    avatar: p.instagram_business_account.profile_picture_url
                 }))
             },
             { upsert: true, new: true }
         );
 
-        // Step 4: Redirect to page selection UI
-        console.log(`[DEBUG] Redirecting to page selection for session ID: ${session._id}`);
-        res.redirect(`${process.env.FRONTEND_URL}/select-page?sessionId=${session._id}`);
+        // --- THIS IS THE NEW REDIRECT LOGIC ---
+        if (hasEmail) {
+            // If we have an email, proceed to page selection as normal.
+            console.log(`[AUTH_CALLBACK] Email found. Redirecting to /select-page.`);
+            res.redirect(`${process.env.FRONTEND_URL}/select-page?sessionId=${session._id}`);
+        } else {
+            // If no email, redirect to the new "enter email" screen.
+            console.log(`[AUTH_CALLBACK] NO email found. Redirecting to /enter-email.`);
+            res.redirect(`${process.env.FRONTEND_URL}/enter-email?sessionId=${session._id}`);
+        }
 
     } catch (error) {
         console.error('\n--- FATAL OAUTH CALLBACK ERROR ---');
-        if (error.response) {
-            console.error('[DEBUG] Axios Error Data:', JSON.stringify(error.response.data, null, 2));
-        } else {
-            console.error('[DEBUG] Non-Axios Error:', error.message);
-        }
-        res.status(500).send('An error occurred during authentication. Check the backend server logs.');
+        console.error(error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
+        res.status(500).send('An error occurred during authentication.');
     }
 });
 
