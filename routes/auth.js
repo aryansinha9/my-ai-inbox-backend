@@ -56,7 +56,8 @@ router.get('/instagram', (req, res) => {
         'pages_manage_metadata',
         'business_management',
         'email',
-        'public_profile'
+        'public_profile',
+        'pages_messaging'
     ];
     
     const scopeString = scopes.join(',');
