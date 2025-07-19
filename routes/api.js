@@ -1,5 +1,4 @@
 // backend/routes/api.js -> FINAL PRODUCTION VERSION
-
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
@@ -100,6 +99,43 @@ router.get('/user/:id', async (req, res) => {
     }
 });
 
+router.get('/onboarding-session/:id', async (req, res) => {
+    try {
+        const session = await OnboardingSession.findById(req.params.id);
+        if (!session) return res.status(404).json({ error: 'Session not found or expired.' });
+        res.json(session);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch session.' });
+    }
+});
+
+// --- NEW ROUTE ADDED HERE ---
+router.post('/onboarding/add-email', async (req, res) => {
+    const { sessionId, email } = req.body;
+
+    if (!sessionId || !email) {
+        return res.status(400).json({ error: 'Session ID and email are required.' });
+    }
+
+    try {
+        const updatedSession = await OnboardingSession.findByIdAndUpdate(
+            sessionId,
+            { $set: { email: email } },
+            { new: true }
+        );
+
+        if (!updatedSession) {
+            return res.status(404).json({ error: 'Session not found or expired.' });
+        }
+
+        console.log(`[API] Successfully added email ${email} to session ${sessionId}`);
+        res.status(200).json({ success: true, message: 'Email updated successfully.' });
+    } catch (error) {
+        console.error('[ADD_EMAIL_ERROR]', error);
+        res.status(500).json({ error: 'Failed to update session with email.' });
+    }
+});
+
 router.post('/finalize-onboarding', async (req, res) => {
     const { sessionId, selectedPageId, agreedToTerms } = req.body;
 
@@ -153,16 +189,6 @@ router.post('/finalize-onboarding', async (req, res) => {
         }
         
         res.status(500).json({ error: 'An unexpected server error occurred. Please try again later.' });
-    }
-});
-
-router.get('/onboarding-session/:id', async (req, res) => {
-    try {
-        const session = await OnboardingSession.findById(req.params.id);
-        if (!session) return res.status(404).json({ error: 'Session not found or expired.' });
-        res.json(session);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch session.' });
     }
 });
 
