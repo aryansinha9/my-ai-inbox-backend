@@ -36,35 +36,32 @@ router.get('/', (req, res) => {
     }
 });
 
-// Webhook Event Handler
+// UPDATED Webhook Event Handler - More robust with safety checks
 router.post('/', (req, res) => {
     const body = req.body;
     
     // Immediately acknowledge the event to prevent Meta retries.
     res.status(200).send('EVENT_RECEIVED');
 
-    if (body.object === 'instagram') {
-        console.log('[Webhook] Received an Instagram event.');
+    if (body.object === 'instagram' || body.object === 'page') {
+        console.log(`[Webhook] Received a '${body.object}' event.`);
 
-        const messageProcessingPromises = body.entry.map(entry => {
-            console.log(`[Webhook] Processing entry ID: ${entry.id}`);
-            
-            return entry.messaging.map(event => {
-                console.log(`[Webhook] Processing event for sender: ${event.sender.id}`);
-
-                if (event.message && !event.message.is_echo) {
-                    return processInstagramMessage(event);
-                }
-                return Promise.resolve(); 
-            });
-        }).flat();
-
-        Promise.all(messageProcessingPromises).catch(err => {
-            console.error('[Webhook] An error occurred in the processing pipeline:', err);
+        body.entry.forEach(entry => {
+            // Critical safety check for messaging array
+            if (entry.messaging && Array.isArray(entry.messaging)) {
+                entry.messaging.forEach(event => {
+                    if (event.message && !event.message.is_echo) {
+                        processInstagramMessage(event).catch(err => {
+                            console.error('[Webhook] Error in message processing pipeline:', err);
+                        });
+                    }
+                });
+            } else {
+                console.log('[Webhook] Received a webhook entry without a "messaging" array. This was likely a test event from the Meta dashboard.');
+            }
         });
-
     } else {
-        console.warn(`[Webhook] Received an event for an object other than Instagram: ${body.object}`);
+        console.warn(`[Webhook] Received an event for an object other than Instagram/Page: ${body.object}`);
     }
 });
 
@@ -174,7 +171,7 @@ async function callPythonAiService(customerId, messageText, client) {
     }
 }
 
-// NEW HELPER FUNCTION: Fetch Instagram user profile details
+// HELPER FUNCTION: Fetch Instagram user profile details
 async function getInstagramUserProfile(userId, pageAccessToken) {
     try {
         const url = `https://graph.facebook.com/${userId}?fields=name,profile_pic&access_token=${pageAccessToken}`;
