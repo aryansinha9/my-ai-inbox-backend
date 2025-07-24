@@ -1,6 +1,7 @@
 // backend/routes/api.js -> FINAL PRODUCTION VERSION
 const express = require('express');
 const router = express.Router();
+const axios = require('axios'); // Added for webhook subscription
 const User = require('../models/User');
 const Conversation = require('../models/Conversation');
 const OnboardingSession = require('../models/OnboardingSession');
@@ -8,6 +9,25 @@ const { OpenAI } = require('openai');
 
 // This mock user is for development/testing. In a real app, you'd use req.user from an auth middleware.
 const MOCK_USER_ID = "66a9f0f67077a9a3b3c3f915"; 
+
+// --- HELPER FUNCTION FOR AUTOMATED WEBHOOK SUBSCRIPTION ---
+async function subscribeWebhookForPage(pageId, pageAccessToken) {
+    console.log(`[WEBHOOK_SUB] Attempting to subscribe page ${pageId} to webhooks...`);
+    const url = `https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`;
+    try {
+        // Use form-urlencoded data as per Meta's API documentation for this endpoint
+        const params = new URLSearchParams();
+        params.append('subscribed_fields', 'messages');
+        params.append('access_token', pageAccessToken);
+
+        await axios.post(url, params);
+        console.log(`[WEBHOOK_SUB] SUCCESS: Page ${pageId} is now subscribed.`);
+        return true;
+    } catch (error) {
+        console.error(`[WEBHOOK_SUB] FAILED: Could not subscribe page ${pageId}. Reason:`, error.response ? error.response.data : error.message);
+        return false;
+    }
+}
 
 router.post('/login', async (req, res) => {
     try {
@@ -109,7 +129,6 @@ router.get('/onboarding-session/:id', async (req, res) => {
     }
 });
 
-// --- NEW ROUTE ADDED HERE ---
 router.post('/onboarding/add-email', async (req, res) => {
     const { sessionId, email } = req.body;
 
@@ -172,11 +191,21 @@ router.post('/finalize-onboarding', async (req, res) => {
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
+        // AUTOMATIC WEBHOOK SUBSCRIPTION
+        try {
+            console.log(`[ONBOARDING] Attempting webhook subscription for page: ${selectedPage.id}`);
+            await subscribeWebhookForPage(selectedPage.id, selectedPage.access_token);
+            console.log(`[ONBOARDING] Webhook subscription successful for page: ${selectedPage.id}`);
+        } catch (webhookError) {
+            console.error(`[ONBOARDING] Webhook subscription failed for page ${selectedPage.id}:`, webhookError.message);
+            // Continue even if webhook subscription fails - we'll log but not block user
+        }
+
         await OnboardingSession.findByIdAndDelete(sessionId);
         res.json(user);
 
     } catch (error) {
-        console.error('[FINALIZE_ERROR]', error.message); // Log only the error message for production
+        console.error('[FINALIZE_ERROR]', error.message);
 
         if (error.code === 11000) {
             if (error.keyPattern && error.keyPattern['business.instagramPageId']) {
