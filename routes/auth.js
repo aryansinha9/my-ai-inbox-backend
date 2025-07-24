@@ -1,4 +1,5 @@
 // backend/routes/auth.js
+
 const express = require('express');
 const axios = require('axios');
 const router = express.Router();
@@ -9,94 +10,73 @@ const FB_APP_ID = process.env.FACEBOOK_APP_ID;
 const FB_APP_SECRET = process.env.FACEBOOK_APP_SECRET;
 const REDIRECT_URI = `${process.env.SERVER_URL}/api/auth/instagram/callback`;
 
-// Helper function to get the user's profile
-async function getUserProfile(accessToken) {
-    const profileUrl = `https://graph.facebook.com/me?fields=id,name,email,picture&access_token=${accessToken}`;
-    const response = await axios.get(profileUrl);
-    return response.data;
-}
+// --- Helper functions (getLongLivedUserToken, getUserProfile) remain the same ---
+// ... (Your existing helper functions go here) ...
 
-// Helper function to get a long-lived user token
-async function getLongLivedUserToken(code) {
-    // Exchange code for short-lived token
-    const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token`;
-    const tokenParams = {
-        client_id: FB_APP_ID,
-        redirect_uri: REDIRECT_URI,
-        client_secret: FB_APP_SECRET,
-        code
-    };
-    const tokenResponse = await axios.get(tokenUrl, { params: tokenParams });
-    const shortLivedToken = tokenResponse.data.access_token;
-
-    // Exchange short-lived for long-lived token
-    const longLivedUrl = `https://graph.facebook.com/v19.0/oauth/access_token`;
-    const longLivedParams = {
-        grant_type: 'fb_exchange_token',
-        client_id: FB_APP_ID,
-        client_secret: FB_APP_SECRET,
-        fb_exchange_token: shortLivedToken
-    };
-    const longLivedResponse = await axios.get(longLivedUrl, { params: longLivedParams });
-    return longLivedResponse.data.access_token;
-}
-
-// Route #1: Kicks off the OAuth flow
+// --- UPDATED OAUTH START ROUTE ---
 router.get('/instagram', (req, res) => {
-    console.log('\n[DEBUG] --- /api/auth/instagram route hit! ---');
-    if (!FB_APP_ID) {
-        console.error('[DEBUG] FATAL: Facebook App ID is not set.');
-        return res.status(500).send('Configuration Error: Facebook App ID is not set on the server.');
-    }
-    
+    console.log('[AUTH_START] Business integration OAuth flow initiated.');
+
+    // Putting business_management first is good practice
     const scopes = [
+        'business_management', // Signals the primary intent
         'instagram_basic',
         'instagram_manage_messages',
         'pages_show_list',
         'pages_manage_metadata',
-        'business_management',
         'email',
         'public_profile',
         'pages_messaging'
     ];
     
-    const scopeString = scopes.join(',');
-    const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${FB_APP_ID}&redirect_uri=${REDIRECT_URI}&scope=${scopeString}`;
-    console.log('[DEBUG] Redirecting user to Facebook...');
+    // Construct the new, more powerful authorization URL
+    const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?` +
+                    `client_id=${FB_APP_ID}&` +
+                    `redirect_uri=${REDIRECT_URI}&` +
+                    `scope=${scopes.join(',')}&` +
+                    // THIS IS THE CRITICAL NEW PARAMETER
+                    `extras={"setup":{"channel":"IG_SC_INBOX"}}`; 
+    
+    console.log('[AUTH_START] Redirecting user to Meta for business integration.');
     res.redirect(authUrl);
 });
 
-// THIS IS THE UPDATED CALLBACK FUNCTION
+// --- UPDATED OAUTH CALLBACK WITH TOKEN VALIDATION ---
 router.get('/instagram/callback', async (req, res) => {
     const { code } = req.query;
     console.log('[AUTH_CALLBACK] OAuth Callback Started.');
 
-    if (!code) {
-        return res.status(400).send('Error: No authorization code provided.');
-    }
+    if (!code) return res.status(400).send('Error: No authorization code provided.');
 
     try {
         const userAccessToken = await getLongLivedUserToken(code);
+        
+        // --- NEW: VALIDATE THE TOKEN ---
+        console.log('[AUTH_CALLBACK] Validating token with debug_token endpoint...');
+        const debugUrl = `https://graph.facebook.com/debug_token?input_token=${userAccessToken}&access_token=${FB_APP_ID}|${FB_APP_SECRET}`;
+        const tokenDebug = await axios.get(debugUrl);
+        
+        const grantedScopes = tokenDebug.data.data.scopes;
+        if (!grantedScopes.includes('pages_messaging')) {
+            console.error('[AUTH_CALLBACK] FATAL: pages_messaging was not granted.');
+            return res.status(403).send('The required permissions were not granted. Please try again and approve all permissions.');
+        }
+        console.log('[AUTH_CALLBACK] Token validation successful. pages_messaging is present.');
+
         const profile = await getUserProfile(userAccessToken);
-
-        // --- THIS IS THE NEW DECISION LOGIC ---
         const hasEmail = profile.email && profile.email.length > 0;
-        console.log(`[AUTH_CALLBACK] Profile received for: ${profile.name}. Email provided: ${hasEmail}`);
 
-        const fields = 'id,name,access_token,instagram_business_account{id,username,profile_picture_url}';
-        const pagesUrl = `https://graph.facebook.com/me/accounts?fields=${fields}&access_token=${userAccessToken}`;
+        const pagesUrl = `https://graph.facebook.com/me/accounts?fields=id,name,access_token,instagram_business_account{id,username,profile_picture_url}&access_token=${userAccessToken}`;
         const pagesResponse = await axios.get(pagesUrl);
         const userPagesWithIg = pagesResponse.data.data.filter(p => p.instagram_business_account);
-
-        if (!userPagesWithIg || userPagesWithIg.length === 0) {
-            return res.status(400).send("Could not find any Facebook Pages with a linked Instagram Business Account.");
-        }
+        
+        if (userPagesWithIg.length === 0) return res.status(400).send("No Instagram Business Accounts found linked to your Facebook Pages.");
 
         const session = await OnboardingSession.findOneAndUpdate(
             { facebookUserId: profile.id },
             {
                 name: profile.name,
-                email: profile.email, // This will be null if not provided
+                email: profile.email,
                 avatarUrl: profile.picture.data.url,
                 pages: userPagesWithIg.map(p => ({
                     id: p.instagram_business_account.id,
@@ -108,14 +88,9 @@ router.get('/instagram/callback', async (req, res) => {
             { upsert: true, new: true }
         );
 
-        // --- THIS IS THE NEW REDIRECT LOGIC ---
         if (hasEmail) {
-            // If we have an email, proceed to page selection as normal.
-            console.log(`[AUTH_CALLBACK] Email found. Redirecting to /select-page.`);
             res.redirect(`${process.env.FRONTEND_URL}/select-page?sessionId=${session._id}`);
         } else {
-            // If no email, redirect to the new "enter email" screen.
-            console.log(`[AUTH_CALLBACK] NO email found. Redirecting to /enter-email.`);
             res.redirect(`${process.env.FRONTEND_URL}/enter-email?sessionId=${session._id}`);
         }
 
