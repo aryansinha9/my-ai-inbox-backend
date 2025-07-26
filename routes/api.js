@@ -7,18 +7,23 @@ const Conversation = require('../models/Conversation');
 const OnboardingSession = require('../models/OnboardingSession');
 const { OpenAI } = require('openai');
 
+// System token for Meta API administrative actions
+const META_SYSTEM_USER_TOKEN = process.env.META_SYSTEM_USER_TOKEN;
+
 // This mock user is for development/testing. In a real app, you'd use req.user from an auth middleware.
-const MOCK_USER_ID = "66a9f0f67077a9a3b3c3f915"; 
+const MOCK_USER_ID = "66a9f0f67077a9a3b3c3f915";
 
 // --- HELPER FUNCTION FOR AUTOMATED WEBHOOK SUBSCRIPTION ---
-async function subscribeWebhookForPage(pageId, pageAccessToken) {
-    console.log(`[WEBHOOK_SUB] Attempting to subscribe page ${pageId} to webhooks...`);
+async function subscribeWebhookForPage(pageId) {
+    console.log(`[WEBHOOK_SUB] Attempting to subscribe page ${pageId} with System User Token...`);
     const url = `https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`;
     try {
         // Use form-urlencoded data as per Meta's API documentation for this endpoint
         const params = new URLSearchParams();
         params.append('subscribed_fields', 'messages');
-        params.append('access_token', pageAccessToken);
+        // --- THIS IS THE CRITICAL CHANGE ---
+        // Use the powerful System User Token for this administrative action.
+        params.append('access_token', META_SYSTEM_USER_TOKEN);
 
         await axios.post(url, params);
         console.log(`[WEBHOOK_SUB] SUCCESS: Page ${pageId} is now subscribed.`);
@@ -194,7 +199,8 @@ router.post('/finalize-onboarding', async (req, res) => {
         // AUTOMATIC WEBHOOK SUBSCRIPTION
         try {
             console.log(`[ONBOARDING] Attempting webhook subscription for page: ${selectedPage.id}`);
-            await subscribeWebhookForPage(selectedPage.id, selectedPage.access_token);
+            // Updated to use system token (no longer passing page token)
+            await subscribeWebhookForPage(selectedPage.id);
             console.log(`[ONBOARDING] Webhook subscription successful for page: ${selectedPage.id}`);
         } catch (webhookError) {
             console.error(`[ONBOARDING] Webhook subscription failed for page ${selectedPage.id}:`, webhookError.message);
