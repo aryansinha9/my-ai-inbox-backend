@@ -67,7 +67,7 @@ router.get('/instagram', (req, res) => {
     res.redirect(authUrl);
 });
 
-// --- OAUTH CALLBACK WITH TOKEN VALIDATION ---
+// --- OAUTH CALLBACK WITH TOKEN VALIDATION (UPDATED VERSION) ---
 router.get('/instagram/callback', async (req, res) => {
     const { code } = req.query;
     console.log('[AUTH_CALLBACK] OAuth Callback Started.');
@@ -77,26 +77,57 @@ router.get('/instagram/callback', async (req, res) => {
     try {
         const userAccessToken = await getLongLivedUserToken(code);
         
-        // Validate the token to ensure it has the required permissions.
+        // Token validation remains the same...
         console.log('[AUTH_CALLBACK] Validating token with debug_token endpoint...');
         const debugUrl = `https://graph.facebook.com/debug_token?input_token=${userAccessToken}&access_token=${FB_APP_ID}|${FB_APP_SECRET}`;
         const tokenDebugResponse = await axios.get(debugUrl);
-        
         const grantedScopes = tokenDebugResponse.data.data.scopes;
         if (!grantedScopes.includes('pages_messaging')) {
-            console.error('[AUTH_CALLBACK] FATAL: pages_messaging permission was not granted by the user.');
-            return res.status(403).send('The required permissions to manage messages were not granted. Please try again and approve all permissions.');
+            console.error('[AUTH_CALLBACK] FATAL: pages_messaging permission was not granted.');
+            return res.status(403).send('The required permissions to manage messages were not granted.');
         }
-        console.log('[AUTH_CALLBACK] Token validation successful. pages_messaging is present.');
+        console.log('[AUTH_CALLBACK] Token validation successful.');
 
         const profile = await getUserProfile(userAccessToken);
         const hasEmail = profile.email && profile.email.length > 0;
 
-        const pagesUrl = `https://graph.facebook.com/me/accounts?fields=id,name,access_token,owner_business,instagram_business_account{id,username,profile_picture_url}&access_token=${userAccessToken}`;
-        const pagesResponse = await axios.get(pagesUrl);
+        // --- START OF THE FIX ---
+
+        // 1. First, get the pages and their linked Instagram accounts WITHOUT asking for the owner.
+        const initialPagesUrl = `https://graph.facebook.com/me/accounts?fields=id,name,access_token,instagram_business_account{id,username,profile_picture_url}&access_token=${userAccessToken}`;
+        const pagesResponse = await axios.get(initialPagesUrl);
         const userPagesWithIg = pagesResponse.data.data.filter(p => p.instagram_business_account);
-        
+
         if (userPagesWithIg.length === 0) return res.status(400).send("No Instagram Business Accounts found linked to your Facebook Pages.");
+
+        // 2. Now, for each of those pages, make a second call to get its business owner.
+        // This is more resilient and won't fail if a page has no owner.
+        const pagesWithBusinessDetails = await Promise.all(
+            userPagesWithIg.map(async (page) => {
+                try {
+                    const ownerUrl = `https://graph.facebook.com/v19.0/${page.id}?fields=owner_business&access_token=${userAccessToken}`;
+                    const ownerResponse = await axios.get(ownerUrl);
+                    
+                    // Combine the original page data with the new business ID
+                    return {
+                        ...page,
+                        businessId: ownerResponse.data.owner_business ? ownerResponse.data.owner_business.id : null,
+                    };
+                } catch (error) {
+                    console.warn(`[AUTH_CALLBACK] Could not fetch owner for page ${page.id}. It might be a classic page. Skipping.`);
+                    return null; // Return null for pages that fail the lookup
+                }
+            })
+        );
+        
+        // 3. Filter out any pages that we couldn't get a business owner for.
+        const validPages = pagesWithBusinessDetails.filter(p => p && p.businessId);
+        
+        if (validPages.length === 0) {
+            return res.status(400).send("Could not find any Instagram accounts that are properly managed by a Meta Business account. Please check your page setup in Meta Business Suite.");
+        }
+
+        // --- END OF THE FIX ---
 
         const session = await OnboardingSession.findOneAndUpdate(
             { facebookUserId: profile.id },
@@ -104,12 +135,12 @@ router.get('/instagram/callback', async (req, res) => {
                 name: profile.name,
                 email: profile.email,
                 avatarUrl: profile.picture.data.url,
-                pages: userPagesWithIg.map(p => ({
+                pages: validPages.map(p => ({ // Use the filtered 'validPages' list
                     id: p.instagram_business_account.id,
                     name: p.instagram_business_account.username,
                     access_token: p.access_token,
                     avatar: p.instagram_business_account.profile_picture_url,
-                    businessId: p.owner_business ? p.owner_business.id : null
+                    businessId: p.businessId // This will now be correctly populated
                 }))
             },
             { upsert: true, new: true }
