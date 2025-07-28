@@ -92,7 +92,7 @@ router.get('/instagram/callback', async (req, res) => {
         const profile = await getUserProfile(userAccessToken);
         const hasEmail = profile.email && profile.email.length > 0;
 
-        const pagesUrl = `https://graph.facebook.com/me/accounts?fields=id,name,access_token,instagram_business_account{id,username,profile_picture_url}&access_token=${userAccessToken}`;
+        const pagesUrl = `https://graph.facebook.com/me/accounts?fields=id,name,access_token,owner_business,instagram_business_account{id,username,profile_picture_url}&access_token=${userAccessToken}`;
         const pagesResponse = await axios.get(pagesUrl);
         const userPagesWithIg = pagesResponse.data.data.filter(p => p.instagram_business_account);
         
