@@ -108,7 +108,8 @@ router.get('/instagram/callback', async (req, res) => {
                     id: p.instagram_business_account.id,
                     name: p.instagram_business_account.username,
                     access_token: p.access_token,
-                    avatar: p.instagram_business_account.profile_picture_url
+                    avatar: p.instagram_business_account.profile_picture_url,
+                    businessId: p.owner_business ? p.owner_business.id : null
                 }))
             },
             { upsert: true, new: true }
