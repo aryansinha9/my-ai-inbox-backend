@@ -40,13 +40,13 @@ async function getUserProfile(accessToken) {
     return response.data;
 }
 
-// --- OAUTH START ROUTE ---
+// --- OAUTH START ROUTE (UPDATED) ---
 router.get('/instagram', (req, res) => {
-    console.log('[AUTH_START] Business integration OAuth flow initiated.');
+    console.log('[AUTH_START] Page Access Token OAuth flow initiated.');
     
-    // The business_management scope is crucial for establishing the integration.
+    // --- CHANGE #1: REMOVE business_management ---
+    // This is the key change. We are no longer asking for a B2B connection.
     const scopes = [
-        'business_management',
         'instagram_basic',
         'instagram_manage_messages',
         'pages_show_list',
@@ -56,18 +56,18 @@ router.get('/instagram', (req, res) => {
         'pages_messaging'
     ];
     
-    // extras.setup triggers the correct business integration flow in the Meta UI.
+    // --- CHANGE #2: REMOVE the 'extras' parameter ---
+    // This ensures Meta shows the standard user-to-app permission screen.
     const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?` +
                     `client_id=${FB_APP_ID}&` +
                     `redirect_uri=${REDIRECT_URI}&` +
-                    `scope=${scopes.join(',')}&` +
-                    `extras={"setup":{"channel":"IG_SC_INBOX"}}`;
+                    `scope=${scopes.join(',')}`;
     
-    console.log('[AUTH_START] Redirecting user to Meta for business integration.');
+    console.log('[AUTH_START] Redirecting user for standard page permissions.');
     res.redirect(authUrl);
 });
 
-// --- OAUTH CALLBACK WITH TOKEN VALIDATION (UPDATED VERSION) ---
+// --- OAUTH CALLBACK WITH TOKEN VALIDATION ---
 router.get('/instagram/callback', async (req, res) => {
     const { code } = req.query;
     console.log('[AUTH_CALLBACK] OAuth Callback Started.');
@@ -90,8 +90,6 @@ router.get('/instagram/callback', async (req, res) => {
 
         const profile = await getUserProfile(userAccessToken);
         const hasEmail = profile.email && profile.email.length > 0;
-
-        // --- START OF THE FIX ---
 
         // 1. First, get the pages and their linked Instagram accounts WITHOUT asking for the owner.
         const initialPagesUrl = `https://graph.facebook.com/me/accounts?fields=id,name,access_token,instagram_business_account{id,username,profile_picture_url}&access_token=${userAccessToken}`;
@@ -126,8 +124,6 @@ router.get('/instagram/callback', async (req, res) => {
         if (validPages.length === 0) {
             return res.status(400).send("Could not find any Instagram accounts that are properly managed by a Meta Business account. Please check your page setup in Meta Business Suite.");
         }
-
-        // --- END OF THE FIX ---
 
         const session = await OnboardingSession.findOneAndUpdate(
             { facebookUserId: profile.id },
