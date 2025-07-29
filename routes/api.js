@@ -1,4 +1,5 @@
-// backend/routes/api.js
+// backend/routes/api.js - DEFINITIVE, COMPLETE, AND CORRECTED VERSION
+
 const express = require('express');
 const router = express.Router();
 const axios = require('axios');
@@ -7,12 +8,20 @@ const Conversation = require('../models/Conversation');
 const OnboardingSession = require('../models/OnboardingSession');
 const { OpenAI } = require('openai');
 
+// Environment variables needed for this file's functions
 const FB_APP_ID = process.env.FACEBOOK_APP_ID;
 const FB_APP_SECRET = process.env.FACEBOOK_APP_SECRET;
-const META_SYSTEM_USER_TOKEN = process.env.META_SYSTEM_USER_TOKEN;
-const MOCK_USER_ID = "66a9f0f67077a9a3b3c3f915";
 
-// --- NEW HELPER FUNCTION: Get a Long-Lived PAGE Access Token ---
+// =============================================================================
+// == HELPER FUNCTIONS FOR THE "PAGE ACCESS TOKEN" ONBOARDING FLOW             ==
+// =============================================================================
+
+/**
+ * Exchanges a short-lived page access token (from the OAuth callback)
+ * for a long-lived one that lasts about 60 days.
+ * @param {string} shortLivedPageToken - The temporary token for the page.
+ * @returns {Promise<string>} A long-lived page access token.
+ */
 async function getLongLivedPageToken(shortLivedPageToken) {
     console.log('[TOKEN] Exchanging short-lived page token for a long-lived one.');
     const url = `https://graph.facebook.com/v19.0/oauth/access_token`;
@@ -29,11 +38,17 @@ async function getLongLivedPageToken(shortLivedPageToken) {
         return response.data.access_token;
     } catch (error) {
         console.error('[TOKEN] FAILED to get long-lived page token:', error.response ? error.response.data : error.message);
-        throw new Error('Could not secure a long-lived token for the page.');
+        throw new Error('Could not secure a permanent token for the selected page.');
     }
 }
 
-// --- REWRITTEN HELPER FUNCTION: Subscribe Webhook using the PAGE Token ---
+/**
+ * Subscribes the application's webhook to a page's 'messages' feed.
+ * This uses the page's own access token to grant permission.
+ * @param {string} pageId - The ID of the Instagram Business Page.
+ * @param {string} pageAccessToken - The long-lived access token for that page.
+ * @returns {Promise<boolean>} True if successful.
+ */
 async function subscribeWebhookForPage(pageId, pageAccessToken) {
     console.log(`[WEBHOOK_SUB] Attempting to subscribe page ${pageId} using its OWN Page Access Token...`);
     
@@ -45,114 +60,37 @@ async function subscribeWebhookForPage(pageId, pageAccessToken) {
         params.append('access_token', pageAccessToken);
 
         await axios.post(url, params);
-        console.log(`[WEBHOOK_SUB] SUCCESS: Page ${pageId} is now subscribed.`);
+        console.log(`[WEBHOOK_SUB] SUCCESS: Page ${pageId} is now subscribed to app webhooks.`);
         return true;
     } catch (error) {
         console.error(`[WEBHOOK_SUB] FAILED: Reason:`, error.response ? error.response.data : error.message);
-        throw new Error('Failed to subscribe page to webhooks.');
+        throw new Error('Failed to subscribe the page to our application webhook.');
     }
 }
 
-router.post('/login', async (req, res) => {
-    try {
-        let user = await User.findOne({ email: 'jane.doe@example.com' });
-        if (!user) {
-            user = await User.create({
-                _id: MOCK_USER_ID,
-                name: 'Jane Doe',
-                email: 'jane.doe@example.com',
-                avatarUrl: 'https://picsum.photos/seed/janedoe/100/100',
-                business: {
-                    name: "Jane's Barbershop",
-                    googleSheetId: 'YOUR_GOOGLE_SHEET_ID_HERE',
-                    instagramPageId: 'YOUR_INSTAGRAM_PAGE_ID_HERE',
-                    instagramPageAccessToken: 'DUMMY_TOKEN'
-                },
-                termsAgreement: {
-                    agreedAt: new Date()
-                }
-            });
-        }
-        res.json(user);
-    } catch (error) {
-        console.error("Login error:", error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
+// =============================================================================
+// == ONBOARDING ROUTES                                                        ==
+// =============================================================================
 
-router.get('/conversations/:platform', async (req, res) => {
-    const { platform } = req.params;
-    const { userId } = req.query;
-    if (!userId) {
-        return res.status(400).json({ error: 'User ID is required' });
-    }
-    try {
-        const conversations = await Conversation.find({ userId, platform }).sort({ lastMessageTimestamp: -1 });
-        res.json(conversations);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch conversations' });
-    }
-});
-
-router.get('/platform/:platform/status', async (req, res) => {
-    const { platform } = req.params;
-    try {
-        const user = await User.findById(MOCK_USER_ID);
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        res.json({ success: true, isEnabled: user.business.platformAiStatus[platform] });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch platform AI status' });
-    }
-});
-
-router.patch('/platform/:platform/toggle-ai', async (req, res) => {
-    const { platform } = req.params;
-    const { isEnabled } = req.body;
-    try {
-        const user = await User.findById(MOCK_USER_ID);
-        if (!user) return res.status(404).json({ error: 'User not found' });
-        user.business.platformAiStatus[platform] = isEnabled;
-        await user.save();
-        res.json({ success: true, isEnabled });
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to update platform AI status' });
-    }
-});
-
-router.patch('/conversations/:id/toggle-ai', async (req, res) => {
-    const { id } = req.params;
-    const { isEnabled } = req.body;
-    try {
-        const updatedConversation = await Conversation.findByIdAndUpdate(id, { isAiEnabled: isEnabled }, { new: true });
-        if (!updatedConversation) return res.status(404).json({ error: 'Conversation not found' });
-        res.json(updatedConversation);
-    } catch (error) {
-        res.status(500).json({ error: 'Failed to update conversation' });
-    }
-});
-
-router.get('/user/:id', async (req, res) => {
-    try {
-        const user = await User.findById(req.params.id);
-        if (!user) return res.status(404).json({ error: 'User not found' });
-        res.json(user);
-    } catch (error) {
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
+/**
+ * Fetches the temporary onboarding session data for the frontend.
+ */
 router.get('/onboarding-session/:id', async (req, res) => {
     try {
         const session = await OnboardingSession.findById(req.params.id);
-        if (!session) return res.status(404).json({ error: 'Session not found or expired.' });
+        if (!session) {
+            return res.status(404).json({ error: 'Session not found or has expired. Please log in again.' });
+        }
         res.json(session);
     } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch session.' });
+        console.error('[ONBOARDING_SESSION_ERROR]', error);
+        res.status(500).json({ error: 'Failed to fetch your session data.' });
     }
 });
 
+/**
+ * Adds an email to the session if Meta couldn't provide one.
+ */
 router.post('/onboarding/add-email', async (req, res) => {
     const { sessionId, email } = req.body;
 
@@ -168,37 +106,48 @@ router.post('/onboarding/add-email', async (req, res) => {
         );
 
         if (!updatedSession) {
-            return res.status(404).json({ error: 'Session not found or expired.' });
+            return res.status(404).json({ error: 'Session not found or has expired.' });
         }
 
-        console.log(`[API] Successfully added email ${email} to session ${sessionId}`);
         res.status(200).json({ success: true, message: 'Email updated successfully.' });
     } catch (error) {
         console.error('[ADD_EMAIL_ERROR]', error);
-        res.status(500).json({ error: 'Failed to update session with email.' });
+        res.status(500).json({ error: 'Failed to save your email.' });
     }
 });
 
-// --- COMPLETELY REWRITTEN /finalize-onboarding ROUTE ---
+
+/**
+ * The final step of onboarding. Creates the user, gets the permanent token,
+ * and subscribes the webhook.
+ */
 router.post('/finalize-onboarding', async (req, res) => {
     const { sessionId, selectedPageId, agreedToTerms } = req.body;
 
-    if (!agreedToTerms) return res.status(400).json({ error: 'You must agree to the Terms and Conditions.' });
-    if (!sessionId || !selectedPageId) return res.status(400).json({ error: 'Session or Page ID is missing.' });
+    if (!agreedToTerms) {
+        return res.status(400).json({ error: 'You must agree to the Terms and Conditions to continue.' });
+    }
+    if (!sessionId || !selectedPageId) {
+        return res.status(400).json({ error: 'Session or Page ID is missing from the request.' });
+    }
 
     try {
+        // 1. Retrieve the temporary session
         const session = await OnboardingSession.findById(sessionId);
-        if (!session) return res.status(404).json({ error: 'Onboarding session expired. Please log in again.' });
-
-        const selectedPage = session.pages.find(p => p.id === selectedPageId);
-        if (!selectedPage || !selectedPage.access_token) {
-            return res.status(400).json({ error: 'Selected page is invalid or missing a token.' });
+        if (!session) {
+            return res.status(404).json({ error: 'Your onboarding session has expired. Please log in again.' });
         }
 
-        // Step A: Exchange the short-lived page token for a long-lived one
+        // 2. Find the page the user selected
+        const selectedPage = session.pages.find(p => p.id === selectedPageId);
+        if (!selectedPage || !selectedPage.access_token) {
+            return res.status(400).json({ error: 'The selected page is invalid or is missing authentication data.' });
+        }
+
+        // 3. Exchange the short-lived token for a long-lived one
         const longLivedPageAccessToken = await getLongLivedPageToken(selectedPage.access_token);
 
-        // Step B: Create or update the user with the long-lived token
+        // 4. Create or update the permanent User record with the long-lived token
         const user = await User.findOneAndUpdate(
             { email: session.email },
             {
@@ -207,21 +156,21 @@ router.post('/finalize-onboarding', async (req, res) => {
                     avatarUrl: session.avatarUrl,
                     'business.facebookUserId': session.facebookUserId,
                     'business.instagramPageId': selectedPage.id,
-                    'business.instagramPageAccessToken': longLivedPageAccessToken,
+                    'business.instagramPageAccessToken': longLivedPageAccessToken, // Save the permanent token
                 },
                 $setOnInsert: {
                     email: session.email,
-                    'business.googleSheetId': '1UH8Bwx14AkI5bvtKdUDTjCmtgDlZmM-DWeVhe1HUuiA',
+                    'business.googleSheetId': '1UH8Bwx14AkI5bvtKdUDTjCmtgDlZmM-DWeVhe1HUuiA', // Default Sheet
                     'termsAgreement': { agreedAt: new Date(), version: '1.0.0' }
                 }
             },
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
-        // Step C: Subscribe the page to webhooks using its own token
+        // 5. Subscribe the page to webhooks using its own new, long-lived token
         await subscribeWebhookForPage(selectedPage.id, longLivedPageAccessToken);
 
-        // Step D: Clean up session
+        // 6. Clean up by deleting the temporary session
         await OnboardingSession.findByIdAndDelete(sessionId);
         
         console.log(`[FINALIZE] Successfully onboarded user ${user.email} for page ${selectedPage.id}`);
@@ -233,6 +182,97 @@ router.post('/finalize-onboarding', async (req, res) => {
     }
 });
 
+
+// =============================================================================
+// == STANDARD API ROUTES FOR THE DASHBOARD                                    ==
+// =============================================================================
+
+/**
+ * Gets a user's profile by their database ID.
+ */
+router.get('/user/:id', async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        res.json(user);
+    } catch (error) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * Fetches all conversations for a given user and platform.
+ */
+router.get('/conversations/:platform', async (req, res) => {
+    const { platform } = req.params;
+    const { userId } = req.query;
+    if (!userId) {
+        return res.status(400).json({ error: 'User ID is required' });
+    }
+    try {
+        const conversations = await Conversation.find({ userId, platform }).sort({ lastMessageTimestamp: -1 });
+        res.json(conversations);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch conversations' });
+    }
+});
+
+/**
+ * Toggles the AI status for a single conversation.
+ */
+router.patch('/conversations/:id/toggle-ai', async (req, res) => {
+    const { id } = req.params;
+    const { isEnabled } = req.body;
+    try {
+        const updatedConversation = await Conversation.findByIdAndUpdate(id, { isAiEnabled: isEnabled }, { new: true });
+        if (!updatedConversation) return res.status(404).json({ error: 'Conversation not found' });
+        res.json(updatedConversation);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update conversation' });
+    }
+});
+
+/**
+ * Fetches the global AI status for a platform (e.g., is all of Instagram on/off).
+ */
+router.get('/platform/:platform/status', async (req, res) => {
+    // This route might need to be updated to use a real user ID from auth middleware later
+    const MOCK_USER_ID = "66a9f0f67077a9a3b3c3f915"; 
+    const { platform } = req.params;
+    try {
+        const user = await User.findById(MOCK_USER_ID);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        res.json({ success: true, isEnabled: user.business.platformAiStatus[platform] });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch platform AI status' });
+    }
+});
+
+/**
+ * Toggles the global AI status for a platform.
+ */
+router.patch('/platform/:platform/toggle-ai', async (req, res) => {
+    // This route might need to be updated to use a real user ID from auth middleware later
+    const MOCK_USER_ID = "66a9f0f67077a9a3b3c3f915";
+    const { platform } = req.params;
+    const { isEnabled } = req.body;
+    try {
+        const user = await User.findById(MOCK_USER_ID);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        user.business.platformAiStatus[platform] = isEnabled;
+        await user.save();
+        res.json({ success: true, isEnabled });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update platform AI status' });
+    }
+});
+
+
+/**
+ * A utility route to generate a quick AI reply suggestion for the dashboard.
+ */
 router.post('/suggest-reply', async (req, res) => {
     const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: 'A prompt is required.' });
@@ -250,6 +290,7 @@ router.post('/suggest-reply', async (req, res) => {
         const reply = completion.choices[0].message.content.trim();
         res.json({ reply });
     } catch (error) {
+        console.error("Error generating AI reply:", error);
         res.status(500).json({ error: "Failed to generate AI suggestion." });
     }
 });
