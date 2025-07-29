@@ -1,37 +1,55 @@
-// backend/routes/api.js -> FINAL PRODUCTION VERSION
+// backend/routes/api.js
 const express = require('express');
 const router = express.Router();
-const axios = require('axios'); // Added for webhook subscription
+const axios = require('axios');
 const User = require('../models/User');
 const Conversation = require('../models/Conversation');
 const OnboardingSession = require('../models/OnboardingSession');
 const { OpenAI } = require('openai');
 
-// System token for Meta API administrative actions
+const FB_APP_ID = process.env.FACEBOOK_APP_ID;
+const FB_APP_SECRET = process.env.FACEBOOK_APP_SECRET;
 const META_SYSTEM_USER_TOKEN = process.env.META_SYSTEM_USER_TOKEN;
-
-// This mock user is for development/testing. In a real app, you'd use req.user from an auth middleware.
 const MOCK_USER_ID = "66a9f0f67077a9a3b3c3f915";
 
-// --- HELPER FUNCTION FOR AUTOMATED WEBHOOK SUBSCRIPTION ---
-async function subscribeWebhookForPage(pageId, pageAccessToken) { // We pass pageAccessToken for logging/future use
-    console.log(`[WEBHOOK_SUB] Attempting to subscribe page ${pageId} with System User Token...`);
+// --- NEW HELPER FUNCTION: Get a Long-Lived PAGE Access Token ---
+async function getLongLivedPageToken(shortLivedPageToken) {
+    console.log('[TOKEN] Exchanging short-lived page token for a long-lived one.');
+    const url = `https://graph.facebook.com/v19.0/oauth/access_token`;
+    const params = {
+        grant_type: 'fb_exchange_token',
+        client_id: FB_APP_ID,
+        client_secret: FB_APP_SECRET,
+        fb_exchange_token: shortLivedPageToken,
+    };
     
-    // This is the correct endpoint for an app-level subscription
+    try {
+        const response = await axios.get(url, { params });
+        console.log('[TOKEN] Successfully got long-lived page token.');
+        return response.data.access_token;
+    } catch (error) {
+        console.error('[TOKEN] FAILED to get long-lived page token:', error.response ? error.response.data : error.message);
+        throw new Error('Could not secure a long-lived token for the page.');
+    }
+}
+
+// --- REWRITTEN HELPER FUNCTION: Subscribe Webhook using the PAGE Token ---
+async function subscribeWebhookForPage(pageId, pageAccessToken) {
+    console.log(`[WEBHOOK_SUB] Attempting to subscribe page ${pageId} using its OWN Page Access Token...`);
+    
     const url = `https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`;
     
     try {
         const params = new URLSearchParams();
         params.append('subscribed_fields', 'messages');
-        // USE THE POWERFUL SYSTEM USER TOKEN FOR THIS ADMINISTRATIVE ACTION
-        params.append('access_token', META_SYSTEM_USER_TOKEN);
+        params.append('access_token', pageAccessToken);
 
         await axios.post(url, params);
         console.log(`[WEBHOOK_SUB] SUCCESS: Page ${pageId} is now subscribed.`);
         return true;
     } catch (error) {
         console.error(`[WEBHOOK_SUB] FAILED: Reason:`, error.response ? error.response.data : error.message);
-        return false;
+        throw new Error('Failed to subscribe page to webhooks.');
     }
 }
 
@@ -161,23 +179,26 @@ router.post('/onboarding/add-email', async (req, res) => {
     }
 });
 
+// --- COMPLETELY REWRITTEN /finalize-onboarding ROUTE ---
 router.post('/finalize-onboarding', async (req, res) => {
     const { sessionId, selectedPageId, agreedToTerms } = req.body;
 
-    if (!agreedToTerms) return res.status(400).json({ error: 'You must agree to the Terms and Conditions to continue.' });
-    if (!sessionId || !selectedPageId) return res.status(400).json({ error: 'Session ID and Selected Page ID are required.' });
+    if (!agreedToTerms) return res.status(400).json({ error: 'You must agree to the Terms and Conditions.' });
+    if (!sessionId || !selectedPageId) return res.status(400).json({ error: 'Session or Page ID is missing.' });
 
     try {
         const session = await OnboardingSession.findById(sessionId);
-        if (!session) return res.status(404).json({ error: 'Onboarding session not found or expired. Please log in again.' });
+        if (!session) return res.status(404).json({ error: 'Onboarding session expired. Please log in again.' });
 
         const selectedPage = session.pages.find(p => p.id === selectedPageId);
-        if (!selectedPage) return res.status(400).json({ error: 'Selected page not found in session.' });
+        if (!selectedPage || !selectedPage.access_token) {
+            return res.status(400).json({ error: 'Selected page is invalid or missing a token.' });
+        }
 
-        if (!session.email) return res.status(400).json({ error: 'Could not retrieve email from your social profile. Please ensure it is public and try again.' });
-        if (!session.name) return res.status(400).json({ error: 'Could not retrieve name from your social profile. Please ensure it is public and try again.' });
-        if (!selectedPage.access_token) return res.status(400).json({ error: 'Could not retrieve valid access token for the selected page.' });
+        // Step A: Exchange the short-lived page token for a long-lived one
+        const longLivedPageAccessToken = await getLongLivedPageToken(selectedPage.access_token);
 
+        // Step B: Create or update the user with the long-lived token
         const user = await User.findOneAndUpdate(
             { email: session.email },
             {
@@ -186,7 +207,7 @@ router.post('/finalize-onboarding', async (req, res) => {
                     avatarUrl: session.avatarUrl,
                     'business.facebookUserId': session.facebookUserId,
                     'business.instagramPageId': selectedPage.id,
-                    'business.instagramPageAccessToken': selectedPage.access_token,
+                    'business.instagramPageAccessToken': longLivedPageAccessToken,
                 },
                 $setOnInsert: {
                     email: session.email,
@@ -197,34 +218,18 @@ router.post('/finalize-onboarding', async (req, res) => {
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
-        // AUTOMATIC WEBHOOK SUBSCRIPTION
-        try {
-            console.log(`[ONBOARDING] Attempting webhook subscription for page: ${selectedPage.id}`);
-            // Updated to pass both page ID and access token (even though token isn't used in the function)
-            await subscribeWebhookForPage(selectedPage.id, selectedPage.access_token);
-            console.log(`[ONBOARDING] Webhook subscription successful for page: ${selectedPage.id}`);
-        } catch (webhookError) {
-            console.error(`[ONBOARDING] Webhook subscription failed for page ${selectedPage.id}:`, webhookError.message);
-            // Continue even if webhook subscription fails - we'll log but not block user
-        }
+        // Step C: Subscribe the page to webhooks using its own token
+        await subscribeWebhookForPage(selectedPage.id, longLivedPageAccessToken);
 
+        // Step D: Clean up session
         await OnboardingSession.findByIdAndDelete(sessionId);
+        
+        console.log(`[FINALIZE] Successfully onboarded user ${user.email} for page ${selectedPage.id}`);
         res.json(user);
 
     } catch (error) {
         console.error('[FINALIZE_ERROR]', error.message);
-
-        if (error.code === 11000) {
-            if (error.keyPattern && error.keyPattern['business.instagramPageId']) {
-                return res.status(409).json({ error: 'This Instagram Page is already connected to another account.' });
-            }
-        }
-        
-        if (error.name === 'ValidationError') {
-            return res.status(400).json({ error: 'A required field was missing. Please try logging in again.' });
-        }
-        
-        res.status(500).json({ error: 'An unexpected server error occurred. Please try again later.' });
+        res.status(500).json({ error: error.message || 'An unexpected server error occurred during finalization.' });
     }
 });
 
