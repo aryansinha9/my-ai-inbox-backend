@@ -1,51 +1,38 @@
-// backend/routes/auth.js
+// backend/routes/auth.js - DEFINITIVE CORRECTED VERSION
 
 const express = require('express');
 const axios = require('axios');
 const router = express.Router();
-const User = require('../models/User');
 const OnboardingSession = require('../models/OnboardingSession');
 
 const FB_APP_ID = process.env.FACEBOOK_APP_ID;
 const FB_APP_SECRET = process.env.FACEBOOK_APP_SECRET;
 const REDIRECT_URI = `${process.env.SERVER_URL}/api/auth/instagram/callback`;
 
-// --- HELPER FUNCTIONS ---
-
+// Helper to get a long-lived USER token (this token is just for the onboarding steps)
 async function getLongLivedUserToken(code) {
     const tokenUrl = `https://graph.facebook.com/v19.0/oauth/access_token`;
-    const tokenParams = {
-        client_id: FB_APP_ID,
-        redirect_uri: REDIRECT_URI,
-        client_secret: FB_APP_SECRET,
-        code
-    };
+    const tokenParams = { client_id: FB_APP_ID, redirect_uri: REDIRECT_URI, client_secret: FB_APP_SECRET, code };
     const tokenResponse = await axios.get(tokenUrl, { params: tokenParams });
     const shortLivedToken = tokenResponse.data.access_token;
 
     const longLivedUrl = `https://graph.facebook.com/v19.0/oauth/access_token`;
-    const longLivedParams = {
-        grant_type: 'fb_exchange_token',
-        client_id: FB_APP_ID,
-        client_secret: FB_APP_SECRET,
-        fb_exchange_token: shortLivedToken
-    };
+    const longLivedParams = { grant_type: 'fb_exchange_token', client_id: FB_APP_ID, client_secret: FB_APP_SECRET, fb_exchange_token: shortLivedToken };
     const longLivedResponse = await axios.get(longLivedUrl, { params: longLivedParams });
     return longLivedResponse.data.access_token;
 }
 
+// Helper to get the user's basic profile
 async function getUserProfile(accessToken) {
     const profileUrl = `https://graph.facebook.com/me?fields=id,name,email,picture&access_token=${accessToken}`;
     const response = await axios.get(profileUrl);
     return response.data;
 }
 
-// --- OAUTH START ROUTE (UPDATED) ---
+// --- OAUTH START ROUTE (Correct for Page Token Flow) ---
 router.get('/instagram', (req, res) => {
     console.log('[AUTH_START] Page Access Token OAuth flow initiated.');
     
-    // --- CHANGE #1: REMOVE business_management ---
-    // This is the key change. We are no longer asking for a B2B connection.
     const scopes = [
         'instagram_basic',
         'instagram_manage_messages',
@@ -56,18 +43,13 @@ router.get('/instagram', (req, res) => {
         'pages_messaging'
     ];
     
-    // --- CHANGE #2: REMOVE the 'extras' parameter ---
-    // This ensures Meta shows the standard user-to-app permission screen.
-    const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?` +
-                    `client_id=${FB_APP_ID}&` +
-                    `redirect_uri=${REDIRECT_URI}&` +
-                    `scope=${scopes.join(',')}`;
+    const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${FB_APP_ID}&redirect_uri=${REDIRECT_URI}&scope=${scopes.join(',')}`;
     
     console.log('[AUTH_START] Redirecting user for standard page permissions.');
     res.redirect(authUrl);
 });
 
-// --- OAUTH CALLBACK WITH TOKEN VALIDATION ---
+// --- OAUTH CALLBACK (Simplified and Corrected) ---
 router.get('/instagram/callback', async (req, res) => {
     const { code } = req.query;
     console.log('[AUTH_CALLBACK] OAuth Callback Started.');
@@ -76,72 +58,39 @@ router.get('/instagram/callback', async (req, res) => {
 
     try {
         const userAccessToken = await getLongLivedUserToken(code);
-        
-        // Token validation remains the same...
-        console.log('[AUTH_CALLBACK] Validating token with debug_token endpoint...');
-        const debugUrl = `https://graph.facebook.com/debug_token?input_token=${userAccessToken}&access_token=${FB_APP_ID}|${FB_APP_SECRET}`;
-        const tokenDebugResponse = await axios.get(debugUrl);
-        const grantedScopes = tokenDebugResponse.data.data.scopes;
-        if (!grantedScopes.includes('pages_messaging')) {
-            console.error('[AUTH_CALLBACK] FATAL: pages_messaging permission was not granted.');
-            return res.status(403).send('The required permissions to manage messages were not granted.');
-        }
-        console.log('[AUTH_CALLBACK] Token validation successful.');
-
         const profile = await getUserProfile(userAccessToken);
         const hasEmail = profile.email && profile.email.length > 0;
 
-        // 1. First, get the pages and their linked Instagram accounts WITHOUT asking for the owner.
-        const initialPagesUrl = `https://graph.facebook.com/me/accounts?fields=id,name,access_token,instagram_business_account{id,username,profile_picture_url}&access_token=${userAccessToken}`;
-        const pagesResponse = await axios.get(initialPagesUrl);
+        // Fetch pages with their SHORT-LIVED page access tokens.
+        // These tokens will be exchanged for long-lived ones in the finalization step.
+        const pagesUrl = `https://graph.facebook.com/me/accounts?fields=id,name,access_token,instagram_business_account{id,username,profile_picture_url}&access_token=${userAccessToken}`;
+        const pagesResponse = await axios.get(pagesUrl);
+        
+        // Filter for pages that have an Instagram account connected
         const userPagesWithIg = pagesResponse.data.data.filter(p => p.instagram_business_account);
 
-        if (userPagesWithIg.length === 0) return res.status(400).send("No Instagram Business Accounts found linked to your Facebook Pages.");
-
-        // 2. Now, for each of those pages, make a second call to get its business owner.
-        // This is more resilient and won't fail if a page has no owner.
-        const pagesWithBusinessDetails = await Promise.all(
-            userPagesWithIg.map(async (page) => {
-                try {
-                    const ownerUrl = `https://graph.facebook.com/v19.0/${page.id}?fields=owner_business&access_token=${userAccessToken}`;
-                    const ownerResponse = await axios.get(ownerUrl);
-                    
-                    // Combine the original page data with the new business ID
-                    return {
-                        ...page,
-                        businessId: ownerResponse.data.owner_business ? ownerResponse.data.owner_business.id : null,
-                    };
-                } catch (error) {
-                    console.warn(`[AUTH_CALLBACK] Could not fetch owner for page ${page.id}. It might be a classic page. Skipping.`);
-                    return null; // Return null for pages that fail the lookup
-                }
-            })
-        );
-        
-        // 3. Filter out any pages that we couldn't get a business owner for.
-        const validPages = pagesWithBusinessDetails.filter(p => p && p.businessId);
-        
-        if (validPages.length === 0) {
-            return res.status(400).send("Could not find any Instagram accounts that are properly managed by a Meta Business account. Please check your page setup in Meta Business Suite.");
+        if (userPagesWithIg.length === 0) {
+            return res.status(400).send("No Instagram Business Accounts were found linked to your Facebook Pages. Please ensure your Instagram account is a 'Business' account and is connected to a Facebook Page in your settings.");
         }
 
+        // Save the session data. We are NO LONGER checking for businessId.
         const session = await OnboardingSession.findOneAndUpdate(
             { facebookUserId: profile.id },
             {
                 name: profile.name,
                 email: profile.email,
                 avatarUrl: profile.picture.data.url,
-                pages: validPages.map(p => ({ // Use the filtered 'validPages' list
+                pages: userPagesWithIg.map(p => ({
                     id: p.instagram_business_account.id,
                     name: p.instagram_business_account.username,
-                    access_token: p.access_token,
-                    avatar: p.instagram_business_account.profile_picture_url,
-                    businessId: p.businessId // This will now be correctly populated
+                    access_token: p.access_token, // This is the short-lived PAGE token
+                    avatar: p.instagram_business_account.profile_picture_url
                 }))
             },
             { upsert: true, new: true }
         );
 
+        // Redirect to the frontend to let the user select a page
         if (hasEmail) {
             res.redirect(`${process.env.FRONTEND_URL}/select-page?sessionId=${session._id}`);
         } else {
