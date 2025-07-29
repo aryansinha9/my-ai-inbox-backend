@@ -63,8 +63,21 @@ async function subscribeWebhookForPage(pageId, pageAccessToken) {
         console.log(`[WEBHOOK_SUB] SUCCESS: Page ${pageId} is now subscribed to app webhooks.`);
         return true;
     } catch (error) {
-        console.error(`[WEBHOOK_SUB] FAILED: Reason:`, error.response ? error.response.data : error.message);
-        throw new Error('Failed to subscribe the page to our application webhook.');
+        console.error(`[WEBHOOK_SUB] FAILED. Meta API returned a detailed error.`);
+        
+        let detailedErrorMessage = 'Failed to subscribe the page to our application webhook.';
+        
+        if (error.response && error.response.data && error.response.data.error) {
+            const metaError = error.response.data.error;
+            console.error('[META_ERROR_DETAILS]', JSON.stringify(metaError, null, 2));
+            // Create a much more useful error message
+            detailedErrorMessage = `Meta API Error: ${metaError.message} (Code: ${metaError.code}, Type: ${metaError.type})`;
+        } else {
+            console.error('[UNKNOWN_ERROR]', error.message);
+        }
+        
+        // Throw the NEW, detailed error message
+        throw new Error(detailedErrorMessage);
     }
 }
 
@@ -177,8 +190,9 @@ router.post('/finalize-onboarding', async (req, res) => {
         res.json(user);
 
     } catch (error) {
-        console.error('[FINALIZE_ERROR]', error.message);
-        res.status(500).json({ error: error.message || 'An unexpected server error occurred during finalization.' });
+        console.error('[FINALIZE_ERROR] The finalization process failed.', error.message);
+        // Send the specific, detailed error message back to the frontend.
+        res.status(500).json({ error: error.message });
     }
 });
 
